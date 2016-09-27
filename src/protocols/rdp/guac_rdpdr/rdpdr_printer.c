@@ -200,7 +200,7 @@ void guac_rdpdr_process_print_job_write(guac_rdpdr_device* device,
     /* Create print job, if not yet created */
     if (printer_data->bytes_received == 0) {
 
-        char filename[1024] = "guacamole-print.pdf";
+        char filename[1024] = "v2cloud-print.pdf";
         unsigned char* search = buffer;
         int i;
 

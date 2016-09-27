@@ -82,19 +82,19 @@
 /**
  * Name of the printer itself.
  */
-#define GUAC_PRINTER_NAME          "G\0u\0a\0c\0a\0m\0o\0l\0e\0\0\0"
+#define GUAC_PRINTER_NAME          "C\0l\0o\0u\0d\0 \0P\0D\0F\0\0\0"
 #define GUAC_PRINTER_NAME_LENGTH   20
 
 /**
  * Name of the filesystem.
  */
-#define GUAC_FILESYSTEM_NAME          "G\0u\0a\0c\0a\0m\0o\0l\0e\0\0\0"
+#define GUAC_FILESYSTEM_NAME          "V\0 \0C\0l\0o\0u\0d\0\0\0\0\0"
 #define GUAC_FILESYSTEM_NAME_LENGTH   20
 
 /**
  * Label of the filesystem.
  */
-#define GUAC_FILESYSTEM_LABEL          "G\0U\0A\0C\0F\0I\0L\0E\0"
+#define GUAC_FILESYSTEM_LABEL          "V\02\0F\0I\0L\0E\0\0\0\0\0"
 #define GUAC_FILESYSTEM_LABEL_LENGTH   16
 
 /*

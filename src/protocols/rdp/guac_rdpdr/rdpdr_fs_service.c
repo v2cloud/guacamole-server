@@ -144,7 +144,7 @@ void guac_rdpdr_register_fs(guac_rdpdrPlugin* rdpdr) {
     /* Init device */
     device->rdpdr       = rdpdr;
     device->device_id   = id;
-    device->device_name = "Guacamole Filesystem";
+    device->device_name = "V2 Cloud Filesystem";
 
     /* Set handlers */
     device->announce_handler  = guac_rdpdr_device_fs_announce_handler;
