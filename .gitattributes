@@ -1,0 +1,5 @@
+*.sh     -crlf
+*.pl     -crlf
+*.in     -crlf
+*.ac     -crlf
+*.am     -crlf
