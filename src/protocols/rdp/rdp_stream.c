@@ -102,8 +102,15 @@ int guac_rdp_upload_file_handler(guac_user* user, guac_stream* stream,
     /* Translate name */
     __generate_upload_path(filename, file_path);
 
+    char tmp_ext[5] = ".tmp";
+    char temp_file_path[GUAC_RDP_FS_MAX_PATH];
+    strcpy(temp_file_path, file_path);
+    if (strlen(temp_file_path) + strlen(tmp_ext) + 1 <= GUAC_RDP_FS_MAX_PATH) {
+        strcat(temp_file_path, tmp_ext);
+    }
+
     /* Open file */
-    file_id = guac_rdp_fs_open(fs, file_path, ACCESS_GENERIC_WRITE, 0,
+    file_id = guac_rdp_fs_open(fs, temp_file_path, ACCESS_GENERIC_WRITE, 0,
             DISP_FILE_OVERWRITE_IF, 0);
     if (file_id < 0) {
         guac_protocol_send_ack(user->socket, stream, "FAIL (CANNOT OPEN)",
@@ -265,6 +272,15 @@ int guac_rdp_upload_end_handler(guac_user* user, guac_stream* stream) {
         guac_socket_flush(user->socket);
         return 0;
     }
+
+    char file_path[GUAC_RDP_FS_MAX_PATH];
+    char *lastdot;
+    guac_rdp_fs_file* file = guac_rdp_fs_get_file(fs, rdp_stream->upload_status.file_id);
+    strcpy (file_path, file->absolute_path);
+    lastdot = strrchr (file_path, '.');
+    if (lastdot != NULL)
+        *lastdot = '\0';
+    guac_rdp_fs_rename(fs, rdp_stream->upload_status.file_id, file_path);
 
     /* Close file */
     guac_rdp_fs_close(fs, rdp_stream->upload_status.file_id);
