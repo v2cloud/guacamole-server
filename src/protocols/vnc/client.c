@@ -19,6 +19,7 @@
 
 #include "config.h"
 
+#include "common/recording.h"
 #include "client.h"
 #include "user.h"
 #include "vnc.h"
@@ -35,6 +36,7 @@
 
 #include <guacamole/client.h>
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -46,6 +48,11 @@ int guac_client_init(guac_client* client) {
     /* Alloc client data */
     guac_vnc_client* vnc_client = calloc(1, sizeof(guac_vnc_client));
     client->data = vnc_client;
+
+#ifdef ENABLE_VNC_TLS_LOCKING
+    /* Initialize the write lock */
+    pthread_mutex_init(&(vnc_client->tls_lock), NULL);
+#endif
 
     /* Init clipboard */
     vnc_client->clipboard = guac_common_clipboard_alloc(GUAC_VNC_CLIPBOARD_MAX_LENGTH);
@@ -102,6 +109,10 @@ int guac_vnc_client_free_handler(guac_client* client) {
     guac_common_ssh_uninit();
 #endif
 
+    /* Clean up recording, if in progress */
+    if (vnc_client->recording != NULL)
+        guac_common_recording_free(vnc_client->recording);
+
     /* Free clipboard */
     if (vnc_client->clipboard != NULL)
         guac_common_clipboard_free(vnc_client->clipboard);
@@ -119,6 +130,11 @@ int guac_vnc_client_free_handler(guac_client* client) {
     /* Free parsed settings */
     if (settings != NULL)
         guac_vnc_settings_free(settings);
+
+#ifdef ENABLE_VNC_TLS_LOCKING
+    /* Clean up TLS lock mutex. */
+    pthread_mutex_destroy(&(vnc_client->tls_lock));
+#endif
 
     /* Free generic data struct */
     free(client->data);

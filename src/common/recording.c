@@ -20,7 +20,9 @@
 #include "common/recording.h"
 
 #include <guacamole/client.h>
+#include <guacamole/protocol.h>
 #include <guacamole/socket.h>
+#include <guacamole/timestamp.h>
 
 #ifdef __MINGW32__
 #include <direct.h>
@@ -133,8 +135,9 @@ static int guac_common_recording_open(const char* path,
 
 }
 
-int guac_common_recording_create(guac_client* client, const char* path,
-        const char* name, int create_path) {
+guac_common_recording* guac_common_recording_create(guac_client* client,
+        const char* path, const char* name, int create_path,
+        int include_output, int include_mouse, int include_keys) {
 
     char filename[GUAC_COMMON_RECORDING_MAX_NAME_LENGTH];
 
@@ -146,7 +149,7 @@ int guac_common_recording_create(guac_client* client, const char* path,
 #endif
         guac_client_log(client, GUAC_LOG_ERROR,
                 "Creation of recording failed: %s", strerror(errno));
-        return 1;
+        return NULL;
     }
 
     /* Attempt to open recording file */
@@ -154,18 +157,59 @@ int guac_common_recording_create(guac_client* client, const char* path,
     if (fd == -1) {
         guac_client_log(client, GUAC_LOG_ERROR,
                 "Creation of recording failed: %s", strerror(errno));
-        return 1;
+        return NULL;
     }
 
-    /* Replace client socket with wrapped socket */
-    client->socket = guac_socket_tee(client->socket, guac_socket_open(fd));
+    /* Create recording structure with reference to underlying socket */
+    guac_common_recording* recording = malloc(sizeof(guac_common_recording));
+    recording->socket = guac_socket_open(fd);
+    recording->include_output = include_output;
+    recording->include_mouse = include_mouse;
+    recording->include_keys = include_keys;
+
+    /* Replace client socket with wrapped recording socket only if including
+     * output within the recording */
+    if (include_output)
+        client->socket = guac_socket_tee(client->socket, recording->socket);
 
     /* Recording creation succeeded */
     guac_client_log(client, GUAC_LOG_INFO,
             "Recording of session will be saved to \"%s\".",
             filename);
 
-    return 0;
+    return recording;
+
+}
+
+void guac_common_recording_free(guac_common_recording* recording) {
+
+    /* If not including broadcast output, the output socket is not associated
+     * with the client, and must be freed manually */
+    if (!recording->include_output)
+        guac_socket_free(recording->socket);
+
+    /* Free recording itself */
+    free(recording);
+
+}
+
+void guac_common_recording_report_mouse(guac_common_recording* recording,
+        int x, int y, int button_mask) {
+
+    /* Report mouse location only if recording should contain mouse events */
+    if (recording->include_mouse)
+        guac_protocol_send_mouse(recording->socket, x, y, button_mask,
+                guac_timestamp_current());
+
+}
+
+void guac_common_recording_report_key(guac_common_recording* recording,
+        int keysym, int pressed) {
+
+    /* Report key state only if recording should contain key events */
+    if (recording->include_keys)
+        guac_protocol_send_key(recording->socket, keysym, pressed,
+                guac_timestamp_current());
 
 }
 

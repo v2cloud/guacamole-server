@@ -68,6 +68,11 @@
 #define GUAC_TELNET_DEFAULT_PASSWORD_REGEX "[Pp]assword:"
 
 /**
+ * The default maximum scrollback size in rows.
+ */
+#define GUAC_TELNET_DEFAULT_MAX_SCROLLBACK 1000
+
+/**
  * Settings for the telnet connection. The values for this structure are parsed
  * from the arguments given during the Guacamole protocol handshake using the
  * guac_telnet_parse_args() function.
@@ -113,9 +118,28 @@ typedef struct guac_telnet_settings {
     regex_t* password_regex;
 
     /**
+     * The regular expression to use when searching for whether login was
+     * successful. If no such regex is specified, or if no login failure regex
+     * was specified, this will be NULL.
+     */
+    regex_t* login_success_regex;
+
+    /**
+     * The regular expression to use when searching for whether login failed.
+     * If no such regex is specified, or if no login success regex was
+     * specified, this will be NULL.
+     */
+    regex_t* login_failure_regex;
+
+    /**
      * Whether this connection is read-only, and user input should be dropped.
      */
     bool read_only;
+
+    /**
+     * The maximum size of the scrollback buffer in rows.
+     */
+    int max_scrollback;
 
     /**
      * The name of the font to use for display rendering.
@@ -146,6 +170,20 @@ typedef struct guac_telnet_settings {
      * The desired screen resolution, in DPI.
      */
     int resolution;
+
+    /**
+     * Whether outbound clipboard access should be blocked. If set, it will not
+     * be possible to copy data from the terminal to the client using the
+     * clipboard.
+     */
+    bool disable_copy;
+
+    /**
+     * Whether inbound clipboard access should be blocked. If set, it will not
+     * be possible to paste data from the client to the terminal using the
+     * clipboard.
+     */
+    bool disable_paste;
 
     /**
      * The path in which the typescript should be saved, if enabled. If no
@@ -181,6 +219,68 @@ typedef struct guac_telnet_settings {
      */
     bool create_recording_path;
 
+    /**
+     * Whether output which is broadcast to each connected client (graphics,
+     * streams, etc.) should NOT be included in the session recording. Output
+     * is included by default, as it is necessary for any recording which must
+     * later be viewable as video.
+     */
+    bool recording_exclude_output;
+
+    /**
+     * Whether changes to mouse state, such as position and buttons pressed or
+     * released, should NOT be included in the session recording. Mouse state
+     * is included by default, as it is necessary for the mouse cursor to be
+     * rendered in any resulting video.
+     */
+    bool recording_exclude_mouse;
+
+    /**
+     * Whether keys pressed and released should be included in the session
+     * recording. Key events are NOT included by default within the recording,
+     * as doing so has privacy and security implications.  Including key events
+     * may be necessary in certain auditing contexts, but should only be done
+     * with caution. Key events can easily contain sensitive information, such
+     * as passwords, credit card numbers, etc.
+     */
+    bool recording_include_keys;
+
+    /**
+     * The ASCII code, as an integer, that the telnet client will use when the
+     * backspace key is pressed.  By default, this is 127, ASCII delete, if
+     * not specified in the client settings.
+     */
+    int backspace;
+
+    /**
+     * The terminal emulator type that is passed to the remote system.
+     */
+    char* terminal_type;
+    
+    /**
+     * Whether or not to send the magic Wake-on-LAN (WoL) packet prior to
+     * continuing the connection.
+     */
+    bool wol_send_packet;
+    
+    /**
+     * The MAC address to put in the magic WoL packet for the remote host to
+     * wake.
+     */
+    char* wol_mac_addr;
+    
+    /**
+     * The broadcast address to which to send the magic WoL packet to wake
+     * the remote host.
+     */
+    char* wol_broadcast_addr;
+    
+    /**
+     * The number of seconds to wait after sending the magic WoL packet before
+     * continuing the connection.
+     */
+    int wol_wait_time;
+
 } guac_telnet_settings;
 
 /**
@@ -204,6 +304,16 @@ typedef struct guac_telnet_settings {
  */
 guac_telnet_settings* guac_telnet_parse_args(guac_user* user,
         int argc, const char** argv);
+
+/**
+ * Frees the regex pointed to by the given pointer, assigning the value NULL to
+ * that pointer once the regex is freed. If the pointer already contains NULL,
+ * this function has no effect.
+ *
+ * @param regex
+ *     The address of the pointer to the regex that should be freed.
+ */
+void guac_telnet_regex_free(regex_t** regex);
 
 /**
  * Frees the given guac_telnet_settings object, having been previously

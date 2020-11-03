@@ -30,6 +30,7 @@
 
 #include "layer-types.h"
 #include "object-types.h"
+#include "protocol-constants.h"
 #include "protocol-types.h"
 #include "socket-types.h"
 #include "stream-types.h"
@@ -107,6 +108,32 @@ int guac_protocol_send_error(guac_socket* socket, const char* error,
         guac_protocol_status status);
 
 /**
+ * Sends a key instruction over the given guac_socket connection.
+ *
+ * If an error occurs sending the instruction, a non-zero value is
+ * returned, and guac_error is set appropriately.
+ *
+ * @param socket
+ *     The guac_socket connection to use.
+ *
+ * @param keysym
+ *     The X11 keysym of the key that was pressed or released.
+ *
+ * @param pressed
+ *     Non-zero if the key represented by the given keysym is currently
+ *     pressed, zero if it is released.
+ *
+ * @param timestamp
+ *     The server timestamp (in milliseconds) at the point in time this key
+ *     event was acknowledged.
+ *
+ * @return
+ *     Zero on success, non-zero on error.
+ */
+int guac_protocol_send_key(guac_socket* socket, int keysym, int pressed,
+        guac_timestamp timestamp);
+
+/**
  * Sends a log instruction over the given guac_socket connection. This is
  * mainly useful in debugging.
  *
@@ -159,16 +186,41 @@ int vguac_protocol_send_log(guac_socket* socket, const char* format,
  * @param y
  *     The Y coordinate of the current mouse position.
  *
+ * @param button_mask
+ *     An integer value representing the current state of each button, where
+ *     the Nth bit within the integer is set to 1 if and only if the Nth mouse
+ *     button is currently pressed. The lowest-order bit is the left mouse
+ *     button, followed by the middle button, right button, and finally the up
+ *     and down buttons of the scroll wheel.
+ *
+ *     @see GUAC_CLIENT_MOUSE_LEFT
+ *     @see GUAC_CLIENT_MOUSE_MIDDLE
+ *     @see GUAC_CLIENT_MOUSE_RIGHT
+ *     @see GUAC_CLIENT_MOUSE_SCROLL_UP
+ *     @see GUAC_CLIENT_MOUSE_SCROLL_DOWN
+ *
+ * @param timestamp
+ *     The server timestamp (in milliseconds) at the point in time this mouse
+ *     position was acknowledged.
+ *
  * @return
  *     Zero on success, non-zero on error.
  */
-int guac_protocol_send_mouse(guac_socket* socket, int x, int y);
+int guac_protocol_send_mouse(guac_socket* socket, int x, int y,
+        int button_mask, guac_timestamp timestamp);
 
 /**
  * Sends a nest instruction over the given guac_socket connection.
  *
  * If an error occurs sending the instruction, a non-zero value is
  * returned, and guac_error is set appropriately.
+ *
+ * @deprecated
+ *     The "nest" instruction and the corresponding guac_socket
+ *     implementation are no longer necessary, having been replaced by
+ *     the streaming instructions ("blob", "ack", "end"). Code using nested
+ *     sockets or the "nest" instruction should instead write to a normal
+ *     socket directly.
  *
  * @param socket The guac_socket connection to use.
  * @param index The integer index of the stram to send the protocol
@@ -381,6 +433,37 @@ int guac_protocol_send_pipe(guac_socket* socket, const guac_stream* stream,
  * @return Zero on success, non-zero on error.
  */
 int guac_protocol_send_blob(guac_socket* socket, const guac_stream* stream,
+        const void* data, int count);
+
+/**
+ * Sends a series of blob instructions, splitting the given data across the
+ * number of instructions required to ensure the size of each blob does not
+ * exceed GUAC_PROTOCOL_BLOB_MAX_LENGTH. If the size of data provided is zero,
+ * no blob instructions are sent.
+ *
+ * If an error occurs sending any blob instruction, a non-zero value is
+ * returned, guac_error is set appropriately, and no further blobs are sent.
+ *
+ * @see GUAC_PROTOCOL_BLOB_MAX_LENGTH
+ *
+ * @param socket
+ *     The guac_socket connection to use to send the blob instructions.
+ *
+ * @param stream
+ *     The stream to associate with each blob sent.
+ *
+ * @param data
+ *     The data which should be sent using the required number of blob
+ *     instructions.
+ *
+ * @param count
+ *     The number of bytes within the given buffer of data that must be
+ *     written.
+ *
+ * @return
+ *     Zero on success, non-zero on error.
+ */
+int guac_protocol_send_blobs(guac_socket* socket, const guac_stream* stream,
         const void* data, int count);
 
 /**
@@ -866,6 +949,31 @@ int guac_protocol_send_size(guac_socket* socket, const guac_layer* layer,
         int w, int h);
 
 /* TEXT INSTRUCTIONS */
+
+/**
+ * Sends an argv instruction over the given guac_socket connection.
+ *
+ * If an error occurs sending the instruction, a non-zero value is
+ * returned, and guac_error is set appropriately.
+ *
+ * @param socket
+ *     The guac_socket connection to use to send the connection parameter
+ *     value.
+ *
+ * @param stream
+ *     The stream to use to send the connection parameter value.
+ *
+ * @param mimetype
+ *     The mimetype of the connection parameter value being sent.
+ *
+ * @param name
+ *     The name of the connection parameter whose current value is being sent.
+ *
+ * @return
+ *     Zero on success, non-zero on error.
+ */
+int guac_protocol_send_argv(guac_socket* socket, guac_stream* stream,
+        const char* mimetype, const char* name);
 
 /**
  * Sends a clipboard instruction over the given guac_socket connection.

@@ -46,6 +46,11 @@ typedef struct guac_vnc_settings {
     int port;
 
     /**
+     * The username given in the arguments.
+     */
+    char* username;
+    
+    /**
      * The password given in the arguments.
      */
     char* password;
@@ -127,6 +132,20 @@ typedef struct guac_vnc_settings {
      */
     char* clipboard_encoding;
 
+    /**
+     * Whether outbound clipboard access should be blocked. If set, it will not
+     * be possible to copy data from the remote desktop to the client using the
+     * clipboard.
+     */
+    bool disable_copy;
+
+    /**
+     * Whether inbound clipboard access should be blocked. If set, it will not
+     * be possible to paste data from the client to the remote desktop using
+     * the clipboard.
+     */
+    bool disable_paste;
+
 #ifdef ENABLE_COMMON_SSH
     /**
      * Whether SFTP should be enabled for the VNC connection.
@@ -137,6 +156,11 @@ typedef struct guac_vnc_settings {
      * The hostname of the SSH server to connect to for SFTP.
      */
     char* sftp_hostname;
+
+    /**
+     * The public SSH host key.
+     */
+    char* sftp_host_key;
 
     /**
      * The port of the SSH server to connect to for SFTP.
@@ -187,6 +211,20 @@ typedef struct guac_vnc_settings {
      * cases.
      */
     int sftp_server_alive_interval;
+    
+    /**
+     * Whether file downloads over SFTP should be blocked.  If set to "true",
+     * the local client will not be able to download files from the SFTP server.
+     * If set to "false" or not set, file downloads will be allowed.
+     */
+    bool sftp_disable_download;
+    
+    /**
+     * Whether file uploads over SFTP should be blocked.  If set to "true", the
+     * local client will not be able to upload files to the SFTP server.  If set
+     * to "false" or not set, file uploads will be allowed.
+     */
+    bool sftp_disable_upload;
 #endif
 
     /**
@@ -205,6 +243,57 @@ typedef struct guac_vnc_settings {
      * does not already exist.
      */
     bool create_recording_path;
+
+    /**
+     * Whether output which is broadcast to each connected client (graphics,
+     * streams, etc.) should NOT be included in the session recording. Output
+     * is included by default, as it is necessary for any recording which must
+     * later be viewable as video.
+     */
+    bool recording_exclude_output;
+
+    /**
+     * Whether changes to mouse state, such as position and buttons pressed or
+     * released, should NOT be included in the session recording. Mouse state
+     * is included by default, as it is necessary for the mouse cursor to be
+     * rendered in any resulting video.
+     */
+    bool recording_exclude_mouse;
+
+    /**
+     * Whether keys pressed and released should be included in the session
+     * recording. Key events are NOT included by default within the recording,
+     * as doing so has privacy and security implications.  Including key events
+     * may be necessary in certain auditing contexts, but should only be done
+     * with caution. Key events can easily contain sensitive information, such
+     * as passwords, credit card numbers, etc.
+     */
+    bool recording_include_keys;
+    
+    /**
+     * Whether or not to send the magic Wake-on-LAN (WoL) packet prior to
+     * trying to connect to the remote host.  By default this will not be sent.
+     * If this option is enabled but a MAC address is not provided a warning will
+     * be logged and the packet will not be sent.
+     */
+    bool wol_send_packet;
+    
+    /**
+     * The MAC address to place in the magic WoL packet to wake the remote host.
+     */
+    char* wol_mac_addr;
+    
+    /**
+     * The broadcast address to which to send the magic WoL packet to wake
+     * the remote host.
+     */
+    char* wol_broadcast_addr;
+    
+    /**
+     * The number of seconds after sending the magic WoL packet to wait before
+     * attempting to connect to the remote host.
+     */
+    int wol_wait_time;
 
 } guac_vnc_settings;
 

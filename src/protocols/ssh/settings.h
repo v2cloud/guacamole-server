@@ -59,6 +59,11 @@
 #define GUAC_SSH_DEFAULT_POLL_TIMEOUT 1000
 
 /**
+ * The default maximum scrollback size in rows.
+ */
+#define GUAC_SSH_DEFAULT_MAX_SCROLLBACK 1000
+
+/**
  * Settings for the SSH connection. The values for this structure are parsed
  * from the arguments given during the Guacamole protocol handshake using the
  * guac_ssh_parse_args() function.
@@ -69,6 +74,11 @@ typedef struct guac_ssh_settings {
      * The hostname of the SSH server to connect to.
      */
     char* hostname;
+
+    /**
+     * The public SSH host key.
+     */
+    char* host_key;
 
     /**
      * The port of the SSH server to connect to.
@@ -111,6 +121,11 @@ typedef struct guac_ssh_settings {
     char* command;
 
     /**
+     * The maximum size of the scrollback buffer in rows.
+     */
+    int max_scrollback;
+
+    /**
      * The name of the font to use for display rendering.
      */
     char* font_name;
@@ -141,6 +156,20 @@ typedef struct guac_ssh_settings {
     int resolution;
 
     /**
+     * Whether outbound clipboard access should be blocked. If set, it will not
+     * be possible to copy data from the terminal to the client using the
+     * clipboard.
+     */
+    bool disable_copy;
+
+    /**
+     * Whether inbound clipboard access should be blocked. If set, it will not
+     * be possible to paste data from the client to the terminal using the
+     * clipboard.
+     */
+    bool disable_paste;
+
+    /**
      * Whether SFTP is enabled.
      */
     bool enable_sftp;
@@ -150,6 +179,20 @@ typedef struct guac_ssh_settings {
      * filesystem guac_object.
      */
     char* sftp_root_directory;
+    
+    /**
+     * Whether file download over SFTP should be disabled.  If set to true, file
+     * downloads will not be allowed over SFTP.  If not set or set to false, file
+     * downloads will be allowed.
+     */
+    bool sftp_disable_download;
+    
+    /**
+     * Whether file uploads over SFTP should be disabled.  If set to true, file
+     * uploads will not be allowed over SFTP.  If not set or set to false, file
+     * uploads will be allowed.
+     */
+    bool sftp_disable_upload;
 
 #ifdef ENABLE_SSH_AGENT
     /**
@@ -193,9 +236,76 @@ typedef struct guac_ssh_settings {
     bool create_recording_path;
 
     /**
+     * Whether output which is broadcast to each connected client (graphics,
+     * streams, etc.) should NOT be included in the session recording. Output
+     * is included by default, as it is necessary for any recording which must
+     * later be viewable as video.
+     */
+    bool recording_exclude_output;
+
+    /**
+     * Whether changes to mouse state, such as position and buttons pressed or
+     * released, should NOT be included in the session recording. Mouse state
+     * is included by default, as it is necessary for the mouse cursor to be
+     * rendered in any resulting video.
+     */
+    bool recording_exclude_mouse;
+
+    /**
+     * Whether keys pressed and released should be included in the session
+     * recording. Key events are NOT included by default within the recording,
+     * as doing so has privacy and security implications.  Including key events
+     * may be necessary in certain auditing contexts, but should only be done
+     * with caution. Key events can easily contain sensitive information, such
+     * as passwords, credit card numbers, etc.
+     */
+    bool recording_include_keys;
+
+    /**
      * The number of seconds between sending server alive messages.
      */
     int server_alive_interval;
+
+    /**
+     * The integer ASCII code of the command to send for backspace.
+     */
+    int backspace;
+
+    /**
+     * The terminal emulator type that is passed to the remote system.
+     */
+    char* terminal_type;
+
+    /**
+     * The locale that should be forwarded to the remote system via the LANG
+     * environment variable.
+     */
+    char* locale;
+
+    /** 
+     * The client timezone to pass to the remote system.
+     */
+    char* timezone;
+    
+    /**
+     * Whether or not to send the Wake-on-LAN magic packet.
+     */
+    bool wol_send_packet;
+    
+    /**
+     * The MAC address to put in the magic WoL packet for the host to wake.
+     */
+    char* wol_mac_addr;
+    
+    /**
+     * The broadcast address to which to send the magic WoL packet.
+     */
+    char* wol_broadcast_addr;
+    
+    /**
+     * The amount of time to wait for the system to wake after sending the packet.
+     */
+    int wol_wait_time;
 
 } guac_ssh_settings;
 

@@ -91,14 +91,17 @@ int guac_vnc_user_join_handler(guac_user* user, int argc, char** argv) {
     /* Only handle events if not read-only */
     if (!settings->read_only) {
 
-        /* General mouse/keyboard/clipboard events */
-        user->mouse_handler     = guac_vnc_user_mouse_handler;
-        user->key_handler       = guac_vnc_user_key_handler;
-        user->clipboard_handler = guac_vnc_clipboard_handler;
+        /* General mouse/keyboard events */
+        user->mouse_handler = guac_vnc_user_mouse_handler;
+        user->key_handler = guac_vnc_user_key_handler;
+
+        /* Inbound (client to server) clipboard transfer */
+        if (!settings->disable_paste)
+            user->clipboard_handler = guac_vnc_clipboard_handler;
 
 #ifdef ENABLE_COMMON_SSH
         /* Set generic (non-filesystem) file upload handler */
-        if (settings->enable_sftp)
+        if (settings->enable_sftp && !settings->sftp_disable_upload)
             user->file_handler = guac_vnc_sftp_file_handler;
 #endif
 
@@ -112,8 +115,10 @@ int guac_vnc_user_leave_handler(guac_user* user) {
 
     guac_vnc_client* vnc_client = (guac_vnc_client*) user->client->data;
 
-    /* Update shared cursor state */
-    guac_common_cursor_remove_user(vnc_client->display->cursor, user);
+    if (vnc_client->display) {
+        /* Update shared cursor state */
+        guac_common_cursor_remove_user(vnc_client->display->cursor, user);
+    }
 
     /* Free settings if not owner (owner settings will be freed with client) */
     if (!user->owner) {

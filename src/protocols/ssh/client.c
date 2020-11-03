@@ -20,6 +20,8 @@
 #include "config.h"
 
 #include "client.h"
+#include "common/clipboard.h"
+#include "common/recording.h"
 #include "common-ssh/sftp.h"
 #include "ssh.h"
 #include "terminal/terminal.h"
@@ -40,6 +42,9 @@ int guac_client_init(guac_client* client) {
     /* Allocate client instance data */
     guac_ssh_client* ssh_client = calloc(1, sizeof(guac_ssh_client));
     client->data = ssh_client;
+
+    /* Init clipboard */
+    ssh_client->clipboard = guac_common_clipboard_alloc(GUAC_SSH_CLIPBOARD_MAX_LENGTH);
 
     /* Set handlers */
     client->join_handler = guac_ssh_user_join_handler;
@@ -70,8 +75,12 @@ int guac_ssh_client_free_handler(guac_client* client) {
 
     /* Free terminal (which may still be using term_channel) */
     if (ssh_client->term != NULL) {
-        guac_terminal_free(ssh_client->term);
+        /* Stop the terminal to unblock any pending reads/writes */
+        guac_terminal_stop(ssh_client->term);
+
+        /* Wait ssh_client_thread to finish before freeing the terminal */
         pthread_join(ssh_client->client_thread, NULL);
+        guac_terminal_free(ssh_client->term);
     }
 
     /* Free terminal channel now that the terminal is finished */
@@ -83,6 +92,10 @@ int guac_ssh_client_free_handler(guac_client* client) {
         guac_common_ssh_destroy_sftp_filesystem(ssh_client->sftp_filesystem);
         guac_common_ssh_destroy_session(ssh_client->sftp_session);
     }
+
+    /* Clean up recording, if in progress */
+    if (ssh_client->recording != NULL)
+        guac_common_recording_free(ssh_client->recording);
 
     /* Free interactive SSH session */
     if (ssh_client->session != NULL)
@@ -97,6 +110,7 @@ int guac_ssh_client_free_handler(guac_client* client) {
         guac_ssh_settings_free(ssh_client->settings);
 
     /* Free client structure */
+    guac_common_clipboard_free(ssh_client->clipboard);
     free(ssh_client);
 
     guac_common_ssh_uninit();

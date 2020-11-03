@@ -21,68 +21,101 @@
 # Dockerfile for guacamole-server
 #
 
-# Start from CentOS base image
-FROM centos:centos7
 
-# Environment variables
-ENV \
-    BUILD_DIR=/tmp/guacd-docker-BUILD \
-    LC_ALL=en_US.UTF-8                \
-    RUNTIME_DEPENDENCIES="            \
-        cairo                         \
-        dejavu-sans-mono-fonts        \
-        freerdp                       \
-        freerdp-plugins               \
-        ghostscript                   \
-        libjpeg-turbo                 \
-        libssh2                       \
-        liberation-mono-fonts         \
-        libtelnet                     \
-        libvorbis                     \
-        libvncserver                  \
-        libwebp                       \
-        pango                         \
-        pulseaudio-libs               \
-        terminus-fonts                \
-        uuid"                         \
-    BUILD_DEPENDENCIES="              \
+# Use Debian as base for the build
+ARG DEBIAN_VERSION=stable
+FROM debian:${DEBIAN_VERSION} AS builder
+
+# Base directory for installed build artifacts.
+# Due to limitations of the Docker image build process, this value is
+# duplicated in an ARG in the second stage of the build.
+#
+ARG PREFIX_DIR=/usr/local/guacamole
+
+# Build arguments
+ARG BUILD_DIR=/tmp/guacd-docker-BUILD
+ARG BUILD_DEPENDENCIES="              \
         autoconf                      \
         automake                      \
-        cairo-devel                   \
-        freerdp-devel                 \
+        freerdp2-dev                  \
         gcc                           \
-        libjpeg-turbo-devel           \
-        libssh2-devel                 \
+        libcairo2-dev                 \
+        libjpeg62-turbo-dev           \
+        libossp-uuid-dev              \
+        libpango1.0-dev               \
+        libpulse-dev                  \
+        libssh2-1-dev                 \
+        libssl-dev                    \
+        libtelnet-dev                 \
         libtool                       \
-        libtelnet-devel               \
-        libvorbis-devel               \
-        libvncserver-devel            \
-        libwebp-devel                 \
-        make                          \
-        pango-devel                   \
-        pulseaudio-libs-devel         \
-        uuid-devel"
+        libvncserver-dev              \
+        libwebsockets-dev             \
+        libwebp-dev                   \
+        make"
 
-# Bring environment up-to-date and install guacamole-server dependencies
-RUN yum -y update                        && \
-    yum -y install epel-release          && \
-    yum -y install $RUNTIME_DEPENDENCIES && \
-    yum clean all
+# Bring build environment up to date and install build dependencies
+RUN apt-get update                         && \
+    apt-get install -y $BUILD_DEPENDENCIES && \
+    rm -rf /var/lib/apt/lists/*
 
 # Add configuration scripts
-COPY src/guacd-docker/bin /opt/guacd/bin/
+COPY src/guacd-docker/bin "${PREFIX_DIR}/bin/"
 
 # Copy source to container for sake of build
 COPY . "$BUILD_DIR"
 
 # Build guacamole-server from local source
-RUN yum -y install $BUILD_DEPENDENCIES         && \
-    /opt/guacd/bin/build-guacd.sh "$BUILD_DIR" && \
-    rm -Rf "$BUILD_DIR"                        && \
-    yum -y autoremove $BUILD_DEPENDENCIES      && \
-    yum clean all
+RUN ${PREFIX_DIR}/bin/build-guacd.sh "$BUILD_DIR" "$PREFIX_DIR"
+
+# Record the packages of all runtime library dependencies
+RUN ${PREFIX_DIR}/bin/list-dependencies.sh    \
+        ${PREFIX_DIR}/sbin/guacd              \
+        ${PREFIX_DIR}/lib/libguac-client-*.so \
+        ${PREFIX_DIR}/lib/freerdp2/guac*.so   \
+        > ${PREFIX_DIR}/DEPENDENCIES
+
+# Use same Debian as the base for the runtime image
+FROM debian:${DEBIAN_VERSION}-slim
+
+# Base directory for installed build artifacts.
+# Due to limitations of the Docker image build process, this value is
+# duplicated in an ARG in the first stage of the build. See also the
+# CMD directive at the end of this build stage.
+#
+ARG PREFIX_DIR=/usr/local/guacamole
+
+# Runtime environment
+ENV LC_ALL=C.UTF-8
+ENV LD_LIBRARY_PATH=${PREFIX_DIR}/lib
+ENV GUACD_LOG_LEVEL=info
+
+ARG RUNTIME_DEPENDENCIES="            \
+        ca-certificates               \
+        ghostscript                   \
+        fonts-liberation              \
+        fonts-dejavu                  \
+        xfonts-terminus"
+
+# Copy build artifacts into this stage
+COPY --from=builder ${PREFIX_DIR} ${PREFIX_DIR}
+
+# Bring runtime environment up to date and install runtime dependencies
+RUN apt-get update                                          && \
+    apt-get install -y $RUNTIME_DEPENDENCIES                && \
+    apt-get install -y $(cat "${PREFIX_DIR}"/DEPENDENCIES)  && \
+    rm -rf /var/lib/apt/lists/*
+
+# Link FreeRDP plugins into proper path
+RUN ${PREFIX_DIR}/bin/link-freerdp-plugins.sh \
+        ${PREFIX_DIR}/lib/freerdp2/libguac*.so
+
+# Expose the default listener port
+EXPOSE 4822
 
 # Start guacd, listening on port 0.0.0.0:4822
-EXPOSE 4822
-CMD [ "/usr/local/sbin/guacd", "-b", "0.0.0.0", "-f" ]
+#
+# Note the path here MUST correspond to the value specified in the 
+# PREFIX_DIR build argument.
+#
+CMD /usr/local/guacamole/sbin/guacd -b 0.0.0.0 -L $GUACD_LOG_LEVEL -f
 
