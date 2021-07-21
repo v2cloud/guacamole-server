@@ -17,25 +17,33 @@
  * under the License.
  */
 
-#ifndef GUAC_RDP_ERROR_H
-#define GUAC_RDP_ERROR_H
+#include <CUnit/CUnit.h>
+#include <guacamole/string.h>
 
-#include <freerdp/freerdp.h>
-#include <guacamole/client.h>
+#include <stdlib.h>
+#include <string.h>
 
 /**
- * Stops the current connection due to the RDP server disconnecting or the
- * connection attempt failing. If the RDP server or FreeRDP provided a reason
- * for for the failure/disconnect, that reason will be logged, and an
- * appropriate error code will be sent to the Guacamole client.
- *
- * @param client
- *     The Guacamole client to disconnect.
- *
- * @param rdp_inst
- *     The FreeRDP client instance handling the RDP connection that failed.
+ * Source test string for copying.
  */
-void guac_rdp_client_abort(guac_client* client, freerdp* rdp_inst);
+const char* source_string = "Mashing avocados.";
 
-#endif
+/**
+ * A NULL string variable for copying to insure that NULL is copied properly.
+ */
+const char* null_string = NULL;
 
+/**
+ * Verify guac_strdup() behavior when the string is both NULL and not NULL.
+ */
+void test_string__strdup() {
+
+    /* Copy the strings. */
+    char* dest_string = guac_strdup(source_string);
+    char* null_copy = guac_strdup(null_string);
+    
+    /* Run the tests. */
+    CU_ASSERT_STRING_EQUAL(dest_string, "Mashing avocados.");
+    CU_ASSERT_PTR_NULL(null_copy);
+
+}

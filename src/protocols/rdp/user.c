@@ -33,6 +33,7 @@
 #include "sftp.h"
 #endif
 
+#include <guacamole/argv.h>
 #include <guacamole/audio.h>
 #include <guacamole/client.h>
 #include <guacamole/protocol.h>
@@ -71,7 +72,7 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
         if (pthread_create(&rdp_client->client_thread, NULL,
                     guac_rdp_client_thread, user->client)) {
             guac_user_log(user, GUAC_LOG_ERROR,
-                    "Unable to start VNC client thread.");
+                    "Unable to start RDP client thread.");
             return 1;
         }
 
@@ -116,6 +117,10 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
 
         /* Inbound arbitrary named pipes */
         user->pipe_handler = guac_rdp_pipe_svc_pipe_handler;
+        
+        /* If we own it, register handler for updating parameters during connection. */
+        if (user->owner)
+            user->argv_handler = guac_argv_handler;
 
     }
 
@@ -127,9 +132,9 @@ int guac_rdp_user_file_handler(guac_user* user, guac_stream* stream,
         char* mimetype, char* filename) {
 
     guac_rdp_client* rdp_client = (guac_rdp_client*) user->client->data;
+    guac_rdp_settings* settings = rdp_client->settings;
 
 #ifdef ENABLE_COMMON_SSH
-    guac_rdp_settings* settings = rdp_client->settings;
 
     /* If SFTP is enabled and SFTP uploads have not been disabled, it should be
      * used for default uploads only if RDPDR is not enabled or its upload

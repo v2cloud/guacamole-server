@@ -17,25 +17,31 @@
  * under the License.
  */
 
-#ifndef GUAC_RDP_ERROR_H
-#define GUAC_RDP_ERROR_H
+#ifndef ARGV_H
+#define ARGV_H
 
-#include <freerdp/freerdp.h>
-#include <guacamole/client.h>
+#include "config.h"
+
+#include <guacamole/argv.h>
+#include <guacamole/user.h>
 
 /**
- * Stops the current connection due to the RDP server disconnecting or the
- * connection attempt failing. If the RDP server or FreeRDP provided a reason
- * for for the failure/disconnect, that reason will be logged, and an
- * appropriate error code will be sent to the Guacamole client.
- *
- * @param client
- *     The Guacamole client to disconnect.
- *
- * @param rdp_inst
- *     The FreeRDP client instance handling the RDP connection that failed.
+ * Handles a received argument value from a Guacamole "argv" instruction,
+ * updating the given connection parameter.
  */
-void guac_rdp_client_abort(guac_client* client, freerdp* rdp_inst);
+guac_argv_callback guac_vnc_argv_callback;
 
-#endif
+/**
+ * The name of the parameter Guacamole will use to specify/update the username
+ * for the VNC connection.
+ */
+#define GUAC_VNC_ARGV_USERNAME "username"
+
+/**
+ * The name of the parameter Guacamole will use to specify/update the password
+ * for the VNC connection.
+ */
+#define GUAC_VNC_ARGV_PASSWORD "password"
+
+#endif /* ARGV_H */
 
