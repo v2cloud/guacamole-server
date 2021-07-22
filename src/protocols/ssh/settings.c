@@ -19,10 +19,13 @@
 
 #include "config.h"
 
+#include "argv.h"
 #include "client.h"
+#include "common/defaults.h"
 #include "settings.h"
 
 #include <guacamole/user.h>
+#include <guacamole/wol-constants.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -35,16 +38,18 @@ const char* GUAC_SSH_CLIENT_ARGS[] = {
     "port",
     "username",
     "password",
-    "font-name",
-    "font-size",
+    GUAC_SSH_ARGV_FONT_NAME,
+    GUAC_SSH_ARGV_FONT_SIZE,
     "enable-sftp",
     "sftp-root-directory",
+    "sftp-disable-download",
+    "sftp-disable-upload",
     "private-key",
     "passphrase",
 #ifdef ENABLE_SSH_AGENT
     "enable-agent",
 #endif
-    "color-scheme",
+    GUAC_SSH_ARGV_COLOR_SCHEME,
     "command",
     "typescript-path",
     "typescript-name",
@@ -60,6 +65,14 @@ const char* GUAC_SSH_CLIENT_ARGS[] = {
     "backspace",
     "terminal-type",
     "scrollback",
+    "locale",
+    "timezone",
+    "disable-copy",
+    "disable-paste",
+    "wol-send-packet",
+    "wol-mac-addr",
+    "wol-broadcast-addr",
+    "wol-wait-time",
     NULL
 };
 
@@ -110,6 +123,18 @@ enum SSH_ARGS_IDX {
      * filesystem guac_object. If omitted, "/" will be used by default.
      */
     IDX_SFTP_ROOT_DIRECTORY,
+    
+    /**
+     * "true" if file downloads over SFTP should be blocked.  "false" or blank
+     * if file downloads should be allowed.
+     */
+    IDX_SFTP_DISABLE_DOWNLOAD,
+    
+    /**
+     * "true" if file uploads over SFTP should be blocked.  "false" or blank if
+     * file uploads should be allowed.
+     */
+    IDX_SFTP_DISABLE_UPLOAD,
 
     /**
      * The private key to use for authentication, if any.
@@ -238,6 +263,67 @@ enum SSH_ARGS_IDX {
      */
     IDX_SCROLLBACK,
 
+    /**
+     * The locale that should be forwarded to the remote system via the LANG
+     * environment variable. By default, no locale is forwarded. This setting
+     * will only have an effect if the SSH server allows the LANG environment
+     * variable to be set.
+     */
+    IDX_LOCALE,
+     
+    /**
+     * The timezone that is to be passed to the remote system, via the
+     * TZ environment variable.  By default, no timezone is forwarded
+     * and the timezone of the remote system will be used.  This
+     * setting will only work if the SSH server allows the TZ variable
+     * to be set.  Timezones should be in standard IANA format, see:
+     * https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+     */
+    IDX_TIMEZONE,
+
+    /**
+     * Whether outbound clipboard access should be blocked. If set to "true",
+     * it will not be possible to copy data from the terminal to the client
+     * using the clipboard. By default, clipboard access is not blocked.
+     */
+    IDX_DISABLE_COPY,
+
+    /**
+     * Whether inbound clipboard access should be blocked. If set to "true", it
+     * will not be possible to paste data from the client to the terminal using
+     * the clipboard. By default, clipboard access is not blocked.
+     */
+    IDX_DISABLE_PASTE,
+    
+    /**
+     * Whether the magic WoL packet should be sent prior to starting the
+     * connection.  If set to "true", the system will attempt to send the WoL
+     * packet and wait for the host to wake up.  By default the WoL packet
+     * is not sent.
+     */
+    IDX_WOL_SEND_PACKET,
+    
+    /**
+     * The MAC address to put in the magic WoL packet to wake the remote system.
+     * By default no MAC address is specified.  If WoL is enabled by a MAC
+     * address is not provided a warning will be logged and the WoL packet will
+     * not be sent.
+     */
+    IDX_WOL_MAC_ADDR,
+    
+    /**
+     * The broadcast address to which to send the magic WoL packet to wake the
+     * remote system.
+     */
+    IDX_WOL_BROADCAST_ADDR,
+    
+    /**
+     * The amount of time to wait after sending the magic WoL packet prior to
+     * continuing the connection attempt.  The default is no wait time
+     * (0 seconds).
+     */
+    IDX_WOL_WAIT_TIME,
+
     SSH_ARGS_COUNT
 };
 
@@ -314,6 +400,16 @@ guac_ssh_settings* guac_ssh_parse_args(guac_user* user,
     settings->sftp_root_directory =
         guac_user_parse_args_string(user, GUAC_SSH_CLIENT_ARGS, argv,
                 IDX_SFTP_ROOT_DIRECTORY, "/");
+    
+    /* Disable file downloads. */
+    settings->sftp_disable_download =
+        guac_user_parse_args_boolean(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_SFTP_DISABLE_DOWNLOAD, false);
+    
+    /* Disable file uploads. */
+    settings->sftp_disable_upload =
+        guac_user_parse_args_boolean(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_SFTP_DISABLE_UPLOAD, false);
 
 #ifdef ENABLE_SSH_AGENT
     settings->enable_agent =
@@ -396,6 +492,53 @@ guac_ssh_settings* guac_ssh_parse_args(guac_user* user,
         guac_user_parse_args_string(user, GUAC_SSH_CLIENT_ARGS, argv,
                 IDX_TERMINAL_TYPE, "linux");
 
+    /* Read locale */
+    settings->locale =
+        guac_user_parse_args_string(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_LOCALE, NULL);
+
+    /* Read the timezone parameter, or use client handshake. */
+    settings->timezone =
+        guac_user_parse_args_string(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_TIMEZONE, user->info.timezone);
+
+    /* Parse clipboard copy disable flag */
+    settings->disable_copy =
+        guac_user_parse_args_boolean(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_DISABLE_COPY, false);
+
+    /* Parse clipboard paste disable flag */
+    settings->disable_paste =
+        guac_user_parse_args_boolean(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_DISABLE_PASTE, false);
+    
+    /* Parse Wake-on-LAN (WoL) parameters. */
+    settings->wol_send_packet =
+        guac_user_parse_args_boolean(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_WOL_SEND_PACKET, false);
+    
+    if (settings->wol_send_packet) {
+        
+        if (strcmp(argv[IDX_WOL_MAC_ADDR], "") == 0) {
+            guac_user_log(user, GUAC_LOG_WARNING, "WoL was enabled, but no ",
+                    "MAC address was provide.  WoL will not be sent.");
+            settings->wol_send_packet = false;
+        }
+        
+        settings->wol_mac_addr =
+            guac_user_parse_args_string(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_WOL_MAC_ADDR, NULL);
+        
+        settings->wol_broadcast_addr =
+            guac_user_parse_args_string(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_WOL_BROADCAST_ADDR, GUAC_WOL_LOCAL_IPV4_BROADCAST);
+        
+        settings->wol_wait_time =
+            guac_user_parse_args_int(user, GUAC_SSH_CLIENT_ARGS, argv,
+                IDX_WOL_WAIT_TIME, GUAC_WOL_DEFAULT_BOOT_WAIT_TIME);
+        
+    }
+
     /* Parsing was successful */
     return settings;
 
@@ -434,6 +577,16 @@ void guac_ssh_settings_free(guac_ssh_settings* settings) {
 
     /* Free terminal emulator type. */
     free(settings->terminal_type);
+
+    /* Free locale */
+    free(settings->locale);
+
+    /* Free the client timezone. */
+    free(settings->timezone);
+    
+    /* Free Wake-on-LAN settings. */
+    free(settings->wol_mac_addr);
+    free(settings->wol_broadcast_addr);
 
     /* Free overall structure */
     free(settings);

@@ -17,28 +17,32 @@
  * under the License.
  */
 
-#include "config.h"
-
-#include "audio_input.h"
+#include "channels/audio-input/audio-input.h"
+#include "channels/cliprdr.h"
+#include "channels/pipe-svc.h"
+#include "common/cursor.h"
 #include "common/display.h"
+#include "config.h"
 #include "input.h"
-#include "user.h"
 #include "rdp.h"
-#include "rdp_settings.h"
-#include "rdp_stream.h"
-#include "rdp_svc.h"
+#include "settings.h"
+#include "upload.h"
+#include "user.h"
 
 #ifdef ENABLE_COMMON_SSH
 #include "sftp.h"
 #endif
 
+#include <guacamole/argv.h>
 #include <guacamole/audio.h>
 #include <guacamole/client.h>
 #include <guacamole/protocol.h>
 #include <guacamole/socket.h>
+#include <guacamole/stream.h>
 #include <guacamole/user.h>
 
 #include <pthread.h>
+#include <stddef.h>
 
 int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
 
@@ -68,7 +72,7 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
         if (pthread_create(&rdp_client->client_thread, NULL,
                     guac_rdp_client_thread, user->client)) {
             guac_user_log(user, GUAC_LOG_ERROR,
-                    "Unable to start VNC client thread.");
+                    "Unable to start RDP client thread.");
             return 1;
         }
 
@@ -86,7 +90,7 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
             guac_audio_stream_add_user(rdp_client->audio, user);
 
         /* Bring user up to date with any registered static channels */
-        guac_rdp_svc_send_pipes(user);
+        guac_rdp_pipe_svc_send_pipes(user);
 
         /* Synchronize with current display */
         guac_common_display_dup(rdp_client->display, user, user->socket);
@@ -97,10 +101,13 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
     /* Only handle events if not read-only */
     if (!settings->read_only) {
 
-        /* General mouse/keyboard/clipboard events */
-        user->mouse_handler     = guac_rdp_user_mouse_handler;
-        user->key_handler       = guac_rdp_user_key_handler;
-        user->clipboard_handler = guac_rdp_clipboard_handler;
+        /* General mouse/keyboard events */
+        user->mouse_handler = guac_rdp_user_mouse_handler;
+        user->key_handler = guac_rdp_user_key_handler;
+
+        /* Inbound (client to server) clipboard transfer */
+        if (!settings->disable_paste)
+            user->clipboard_handler = guac_rdp_clipboard_handler;
 
         /* Display size change events */
         user->size_handler = guac_rdp_user_size_handler;
@@ -109,7 +116,11 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
         user->file_handler = guac_rdp_user_file_handler;
 
         /* Inbound arbitrary named pipes */
-        user->pipe_handler = guac_rdp_svc_pipe_handler;
+        user->pipe_handler = guac_rdp_pipe_svc_pipe_handler;
+        
+        /* If we own it, register handler for updating parameters during connection. */
+        if (user->owner)
+            user->argv_handler = guac_argv_handler;
 
     }
 
@@ -121,20 +132,21 @@ int guac_rdp_user_file_handler(guac_user* user, guac_stream* stream,
         char* mimetype, char* filename) {
 
     guac_rdp_client* rdp_client = (guac_rdp_client*) user->client->data;
-
-#ifdef ENABLE_COMMON_SSH
     guac_rdp_settings* settings = rdp_client->settings;
 
-    /* If SFTP is enabled, it should be used for default uploads only if RDPDR
-     * is not enabled or its upload directory has been set */
-    if (rdp_client->sftp_filesystem != NULL) {
+#ifdef ENABLE_COMMON_SSH
+
+    /* If SFTP is enabled and SFTP uploads have not been disabled, it should be
+     * used for default uploads only if RDPDR is not enabled or its upload
+     * directory has been set */
+    if (rdp_client->sftp_filesystem != NULL && !settings->sftp_disable_upload) {
         if (!settings->drive_enabled || settings->sftp_directory != NULL)
             return guac_rdp_sftp_file_handler(user, stream, mimetype, filename);
     }
 #endif
 
     /* Default to using RDPDR uploads (if enabled) */
-    if (rdp_client->filesystem != NULL)
+    if (rdp_client->filesystem != NULL && !settings->disable_upload)
         return guac_rdp_upload_file_handler(user, stream, mimetype, filename);
 
     /* File transfer not enabled */

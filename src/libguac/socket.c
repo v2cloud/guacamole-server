@@ -19,10 +19,10 @@
 
 #include "config.h"
 
-#include "error.h"
-#include "protocol.h"
-#include "socket.h"
-#include "timestamp.h"
+#include "guacamole/error.h"
+#include "guacamole/protocol.h"
+#include "guacamole/socket.h"
+#include "guacamole/timestamp.h"
 
 #include <inttypes.h>
 #include <pthread.h>
@@ -43,6 +43,8 @@ char __guac_socket_BASE64_CHARACTERS[64] = {
 };
 
 static void* __guac_socket_keep_alive_thread(void* data) {
+
+    int old_cancelstate;
 
     /* Calculate sleep interval */
     struct timespec interval;
@@ -65,8 +67,11 @@ static void* __guac_socket_keep_alive_thread(void* data) {
 
         }
 
-        /* Sleep until next keep-alive check */
+        /* Sleep until next keep-alive check, but allow thread cancellation
+         * during that sleep */
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &old_cancelstate);
         nanosleep(&interval, NULL);
+        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_cancelstate);
 
     }
 
@@ -202,9 +207,11 @@ void guac_socket_free(guac_socket* socket) {
     /* Mark as closed */
     socket->state = GUAC_SOCKET_CLOSED;
 
-    /* Wait for keep-alive, if enabled */
-    if (socket->__keep_alive_enabled)
+    /* Stop keep-alive thread, if enabled */
+    if (socket->__keep_alive_enabled) {
+        pthread_cancel(socket->__keep_alive_thread);
         pthread_join(socket->__keep_alive_thread, NULL);
+    }
 
     free(socket);
 }

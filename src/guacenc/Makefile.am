@@ -16,6 +16,12 @@
 # specific language governing permissions and limitations
 # under the License.
 #
+# NOTE: Parts of this file (Makefile.am) are automatically transcluded verbatim
+# into Makefile.in. Though the build system (GNU Autotools) automatically adds
+# its own license boilerplate to the generated Makefile.in, that boilerplate
+# does not apply to the transcluded portions of Makefile.am which are licensed
+# to you by the ASF under the Apache License, Version 2.0, as described above.
+#
 
 AUTOMAKE_OPTIONS = foreign 
 
@@ -84,6 +90,7 @@ endif
 guacenc_CFLAGS =            \
     -Werror -Wall           \
     @AVCODEC_CFLAGS@        \
+    @AVFORMAT_CFLAGS@       \
     @AVUTIL_CFLAGS@         \
     @LIBGUAC_INCLUDE@       \
     @SWSCALE_CFLAGS@
@@ -91,12 +98,13 @@ guacenc_CFLAGS =            \
 guacenc_LDADD =     \
     @LIBGUAC_LTLIB@
 
-guacenc_LDFLAGS =  \
-    @AVCODEC_LIBS@ \
-    @AVUTIL_LIBS@  \
-    @CAIRO_LIBS@   \
-    @JPEG_LIBS@    \
-    @SWSCALE_LIBS@ \
+guacenc_LDFLAGS =   \
+    @AVCODEC_LIBS@  \
+    @AVFORMAT_LIBS@ \
+    @AVUTIL_LIBS@   \
+    @CAIRO_LIBS@    \
+    @JPEG_LIBS@     \
+    @SWSCALE_LIBS@  \
     @WEBP_LIBS@
 
 EXTRA_DIST =         \
