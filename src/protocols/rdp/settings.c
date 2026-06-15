@@ -600,8 +600,17 @@ enum RDP_ARGS_IDX {
     IDX_RESIZE_METHOD,
 
     /**
-     * The maximum allowed count of secondary monitors.
-     * 0 to disable.
+     * The maximum number of *additional* monitors (beyond the primary)
+     * that the user is permitted to open for this connection. The total
+     * monitor count is therefore at most this value plus 1.
+     *
+     * A value of 0 (the default) disables multi-monitor entirely: the
+     * client will not advertise multi-monitor capability and any
+     * subsequent attempt to open a secondary monitor window will be
+     * rejected by the server.
+     *
+     * Negative values and values above GUAC_RDP_MAX_SECONDARY_MONITORS
+     * are clamped at parse time.
      */
     IDX_SECONDARY_MONITORS,
 
@@ -1241,10 +1250,18 @@ guac_rdp_settings* guac_rdp_parse_args(guac_user* user,
         settings->resize_method = GUAC_RESIZE_NONE;
     }
 
-    /* Maximum secondary monitors (default 0 = disabled) */
-    settings->max_secondary_monitors =
+    /* Maximum secondary monitors (default 0 = disabled). Clamp to a sane
+     * non-negative range; the upper bound matches what FreeRDP and Windows
+     * realistically support, and keeps multimon-layout JSON bounded for
+     * the broadcast path. */
+    int parsed_max_secondary_monitors =
         guac_user_parse_args_int(user, GUAC_RDP_CLIENT_ARGS, argv,
                 IDX_SECONDARY_MONITORS, 0);
+    if (parsed_max_secondary_monitors < 0)
+        parsed_max_secondary_monitors = 0;
+    if (parsed_max_secondary_monitors > GUAC_RDP_MAX_SECONDARY_MONITORS)
+        parsed_max_secondary_monitors = GUAC_RDP_MAX_SECONDARY_MONITORS;
+    settings->max_secondary_monitors = parsed_max_secondary_monitors;
 
     /* RDP Graphics Pipeline enable/disable */
     settings->enable_gfx =

@@ -131,15 +131,17 @@ static int guac_rdp_join_pending_handler(guac_client* client) {
     /* Bring user up to date with any registered static channels */
     guac_rdp_pipe_svc_send_pipes(client, broadcast_socket);
 
-    /* Get max secondary monitors */
-    char* max_monitors = guac_mem_alloc(12);
+    /* Send current max allowed secondary monitors to the joining user so
+     * the client knows how many additional windows it may open. The value
+     * is clamped to [0, GUAC_RDP_MAX_SECONDARY_MONITORS] at parse time so
+     * it always fits in a 12-byte decimal buffer (max value is 16 today;
+     * even uint32_t max ("4294967295") would fit). */
+    char max_monitors[12];
     guac_itoa(max_monitors,
             (unsigned int) rdp_client->settings->max_secondary_monitors);
 
-    /* Send current max allowed secondary monitors */
     guac_client_stream_argv(client, broadcast_socket, "text/plain",
             "secondary-monitors", max_monitors);
-    guac_mem_free(max_monitors);
 
     /* Synchronize with current display */
     if (rdp_client->display != NULL) {

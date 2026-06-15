@@ -79,6 +79,15 @@
 #define GUAC_RDP_DEFAULT_RECORDING_NAME "recording"
 
 /**
+ * The maximum allowed value for the `secondary-monitors` connection
+ * parameter. A user-supplied value above this is clamped at parse time.
+ * Sized so the multimon-layout JSON broadcast stays well within its 2KB
+ * buffer and so realistic monitor-count requests can't pathologically
+ * inflate per-frame work in the FreeRDP DISPLAY_CONTROL channel.
+ */
+#define GUAC_RDP_MAX_SECONDARY_MONITORS 16
+
+/**
  * The number of entries contained within the OrderSupport BYTE array
  * referenced by the rdpSettings structure. This value is defined by the RDP
  * negotiation process (there are 32 bytes available within the order
