@@ -799,6 +799,27 @@ struct guac_display {
      */
     guac_flag render_state;
 
+    /**
+     * Optional callback consulted before transmitting any default-layer
+     * `copy` operation. If non-NULL and returning non-zero, the affected
+     * copy is rewritten as an IMG operation so the worker threads will
+     * re-encode and transmit the destination region as a fresh image
+     * instead of a screen-to-screen copy.
+     *
+     * Currently set by the RDP protocol module so that cross-monitor
+     * SCRBLT blits are decomposed server-side, sparing connected clients
+     * from needing access to source pixels that aren't on their visible
+     * canvas region. NULL by default — single-protocol consumers do not
+     * pay any per-copy overhead.
+     */
+    guac_display_should_decompose_copy_handler* should_decompose_copy;
+
+    /**
+     * Opaque user pointer passed to should_decompose_copy on each
+     * invocation.
+     */
+    void* should_decompose_copy_closure;
+
 };
 
 /**
