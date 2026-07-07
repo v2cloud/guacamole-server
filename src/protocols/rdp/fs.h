@@ -366,7 +366,7 @@ int guac_rdp_fs_get_errorcode(int err);
  *     A status code corresponding to the given error code that an
  *     implementation of the RDPDR channel can understand.
  */
-int guac_rdp_fs_get_status(int err);
+unsigned int guac_rdp_fs_get_status(int err);
 
 /**
  * Opens the given file, returning the a new file ID, or an error code less
@@ -449,7 +449,7 @@ int guac_rdp_fs_read(guac_rdp_fs* fs, int file_id, uint64_t offset,
  *     The ID of the file to write data to, as returned by guac_rdp_fs_open().
  *
  * @param offset
- *     The byte offset within the file to start writinging at.
+ *     The byte offset within the file to start writing at.
  *
  * @param buffer
  *     The buffer containing the data to write.

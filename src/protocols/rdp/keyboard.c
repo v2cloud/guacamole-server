@@ -26,6 +26,7 @@
 #include <freerdp/input.h>
 #include <guacamole/client.h>
 #include <guacamole/mem.h>
+#include <guacamole/rwlock.h>
 
 #include <stdlib.h>
 
@@ -106,7 +107,8 @@ static void guac_rdp_send_key_event(guac_rdp_client* rdp_client,
 
     /* Send actual key */
     pthread_mutex_lock(&(rdp_client->message_lock));
-    rdp_inst->input->KeyboardEvent(rdp_inst->input, flags | pressed_flags, scancode);
+    GUAC_RDP_CONTEXT(rdp_inst)->input->KeyboardEvent(
+            GUAC_RDP_CONTEXT(rdp_inst)->input, flags | pressed_flags, scancode);
     pthread_mutex_unlock(&(rdp_client->message_lock));
 
 }
@@ -135,7 +137,8 @@ static void guac_rdp_send_unicode_event(guac_rdp_client* rdp_client,
 
     /* Send Unicode event */
     pthread_mutex_lock(&(rdp_client->message_lock));
-    rdp_inst->input->UnicodeKeyboardEvent(rdp_inst->input, 0, codepoint);
+    GUAC_RDP_CONTEXT(rdp_inst)->input->UnicodeKeyboardEvent(
+            GUAC_RDP_CONTEXT(rdp_inst)->input, 0, codepoint);
     pthread_mutex_unlock(&(rdp_client->message_lock));
 
 }
@@ -164,7 +167,8 @@ static void guac_rdp_send_synchronize_event(guac_rdp_client* rdp_client,
 
     /* Synchronize lock key states */
     pthread_mutex_lock(&(rdp_client->message_lock));
-    rdp_inst->input->SynchronizeEvent(rdp_inst->input, flags);
+    GUAC_RDP_CONTEXT(rdp_inst)->input->SynchronizeEvent(
+            GUAC_RDP_CONTEXT(rdp_inst)->input, flags);
     pthread_mutex_unlock(&(rdp_client->message_lock));
 
 }
@@ -718,7 +722,7 @@ BOOL guac_rdp_keyboard_set_indicators(rdpContext* context, UINT16 flags) {
     guac_client* client = ((rdp_freerdp_context*) context)->client;
     guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
 
-    pthread_rwlock_rdlock(&(rdp_client->lock));
+    guac_rwlock_acquire_read_lock(&(rdp_client->lock));
 
     /* Skip if keyboard not yet ready */
     guac_rdp_keyboard* keyboard = rdp_client->keyboard;
@@ -730,7 +734,7 @@ BOOL guac_rdp_keyboard_set_indicators(rdpContext* context, UINT16 flags) {
     keyboard->lock_flags = flags;
 
 complete:
-    pthread_rwlock_unlock(&(rdp_client->lock));
+    guac_rwlock_release_lock(&(rdp_client->lock));
     return TRUE;
 
 }

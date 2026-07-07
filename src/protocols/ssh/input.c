@@ -19,8 +19,6 @@
 
 #include "config.h"
 
-#include "common/cursor.h"
-#include "common/display.h"
 #include "ssh.h"
 #include "terminal/terminal.h"
 
@@ -70,7 +68,8 @@ int guac_ssh_user_key_handler(guac_user* user, int keysym, int pressed) {
     return 0;
 }
 
-int guac_ssh_user_size_handler(guac_user* user, int width, int height) {
+int guac_ssh_user_size_handler(guac_user* user, int width, int height,
+        int x_position, int top_offset, int left_offset) {
 
     /* Get terminal */
     guac_client* client = user->client;

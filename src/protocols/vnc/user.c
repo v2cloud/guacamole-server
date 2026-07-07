@@ -21,9 +21,6 @@
 
 #include "clipboard.h"
 #include "input.h"
-#include "common/display.h"
-#include "common/dot_cursor.h"
-#include "common/pointer_cursor.h"
 #include "user.h"
 #include "sftp.h"
 #include "vnc.h"
@@ -35,6 +32,7 @@
 #include <guacamole/argv.h>
 #include <guacamole/audio.h>
 #include <guacamole/client.h>
+#include <guacamole/display.h>
 #include <guacamole/socket.h>
 #include <guacamole/user.h>
 #include <rfb/rfbclient.h>
@@ -85,17 +83,43 @@ int guac_vnc_user_join_handler(guac_user* user, int argc, char** argv) {
         if (!settings->disable_paste)
             user->clipboard_handler = guac_vnc_clipboard_handler;
         
-        /* Updates to connection parameters if we own the connection */
-        if (user->owner)
-            user->argv_handler = guac_argv_handler;
-
 #ifdef ENABLE_COMMON_SSH
         /* Set generic (non-filesystem) file upload handler */
         if (settings->enable_sftp && !settings->sftp_disable_upload)
             user->file_handler = guac_vnc_sftp_file_handler;
 #endif
 
+#ifdef LIBVNC_HAS_RESIZE_SUPPORT
+        /* If user is owner, set size handler. */
+        if (user->owner && !settings->disable_display_resize)
+            user->size_handler = guac_vnc_user_size_handler;
+#else
+        guac_user_log(user, GUAC_LOG_WARNING,
+                "The libvncclient library does not support remote resize.");
+#endif // LIBVNC_HAS_RESIZE_SUPPORT
+
     }
+
+
+    /**
+     * Update connection parameters if we own the connection. 
+     *
+     * Note that the argv handler is called *regardless* of whether
+     * or not the connection is read-only, as this allows authentication
+     * to be prompted and processed even if the owner cannot send
+     * input to the remote session. In the future, if other argv handling
+     * is added to the VNC protocol, checks may need to be done within
+     * the argv handler to verify that read-only connections remain
+     * read-only.
+     *
+     * Also, this is only handled for the owner - if the argv handler
+     * is expanded to include non-owner users in the future, special
+     * care will need to be taken to make sure that the arguments
+     * processed by the handler do not have unintended security
+     * implications for non-owner users.
+     */
+    if (user->owner)
+        user->argv_handler = guac_argv_handler;
 
     return 0;
 
@@ -105,10 +129,8 @@ int guac_vnc_user_leave_handler(guac_user* user) {
 
     guac_vnc_client* vnc_client = (guac_vnc_client*) user->client->data;
 
-    if (vnc_client->display) {
-        /* Update shared cursor state */
-        guac_common_cursor_remove_user(vnc_client->display->cursor, user);
-    }
+    if (vnc_client->display)
+        guac_display_notify_user_left(vnc_client->display, user);
 
     /* Free settings if not owner (owner settings will be freed with client) */
     if (!user->owner) {

@@ -69,7 +69,7 @@
 #endif
 
 /**
- * Writes the specied frame as a new frame of video. If pending frames of the
+ * Writes the specified frame as a new frame of video. If pending frames of the
  * video are being flushed, the given frame may be NULL (as required by
  * avcodec_encode_video2()). If avcodec_encode_video2() does not exist, this
  * function will transparently use avcodec_encode_video().
@@ -128,7 +128,7 @@ int guacenc_avcodec_encode_video(guacenc_video* video, AVFrame* frame);
  *     The pointer to the configured AVCodecContext.
  *
  */
-AVCodecContext* guacenc_build_avcodeccontext(AVStream* stream, AVCodec* codec,
+AVCodecContext* guacenc_build_avcodeccontext(AVStream* stream, const AVCodec* codec,
         int bitrate, int width, int height, int gop_size, int qmax, int qmin,
         int pix_fmt, AVRational time_base);
 
@@ -158,7 +158,7 @@ AVCodecContext* guacenc_build_avcodeccontext(AVStream* stream, AVCodec* codec,
  *     Zero on success, a negative value on error.
  */
 int guacenc_open_avcodec(AVCodecContext *avcodec_context,
-        AVCodec *codec, AVDictionary **options,
+        const AVCodec *codec, AVDictionary **options,
         AVStream* stream);
 
 #endif

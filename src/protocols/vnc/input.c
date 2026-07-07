@@ -19,10 +19,10 @@
 
 #include "config.h"
 
-#include "common/cursor.h"
-#include "common/display.h"
+#include "display.h"
 #include "vnc.h"
 
+#include <guacamole/display.h>
 #include <guacamole/recording.h>
 #include <guacamole/user.h>
 #include <rfb/rfbclient.h>
@@ -34,7 +34,7 @@ int guac_vnc_user_mouse_handler(guac_user* user, int x, int y, int mask) {
     rfbClient* rfb_client = vnc_client->rfb_client;
 
     /* Store current mouse location/state */
-    guac_common_cursor_update(vnc_client->display->cursor, user, x, y, mask);
+    guac_display_render_thread_notify_user_moved_mouse(vnc_client->render_thread, user, x, y, mask);
 
     /* Report mouse position within recording */
     if (vnc_client->recording != NULL)
@@ -64,3 +64,19 @@ int guac_vnc_user_key_handler(guac_user* user, int keysym, int pressed) {
     return 0;
 }
 
+#ifdef LIBVNC_HAS_RESIZE_SUPPORT
+int guac_vnc_user_size_handler(guac_user* user, int width, int height,
+        int x_position, int top_offset, int left_offset) {
+
+    guac_user_log(user, GUAC_LOG_TRACE, "Running user size handler.");
+
+    /* Get the Guacamole VNC client */
+    guac_vnc_client* vnc_client = (guac_vnc_client*) user->client->data;
+
+    /* Send display update */
+    guac_vnc_display_set_size(vnc_client->rfb_client, width, height);
+
+    return 0;
+
+}
+#endif // LIBVNC_HAS_RESIZE_SUPPORT

@@ -17,7 +17,6 @@
  * under the License.
  */
 
-
 #ifndef GUAC_COMMON_CURSOR_H
 #define GUAC_COMMON_CURSOR_H
 
@@ -118,7 +117,7 @@ typedef struct guac_common_cursor {
     int button_mask;
 
     /**
-     * The server timestamp representing the point in time when the mousr
+     * The server timestamp representing the point in time when the mouse
      * location was last updated.
      */
     guac_timestamp timestamp;

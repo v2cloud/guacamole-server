@@ -18,7 +18,6 @@
  */
 
 #include "channels/rdpei.h"
-#include "common/surface.h"
 #include "plugins/channels.h"
 #include "rdp.h"
 #include "settings.h"
@@ -27,6 +26,7 @@
 #include <freerdp/freerdp.h>
 #include <freerdp/event.h>
 #include <guacamole/client.h>
+#include <guacamole/display.h>
 #include <guacamole/mem.h>
 #include <guacamole/timestamp.h>
 
@@ -67,27 +67,27 @@ void guac_rdp_rdpei_free(guac_rdp_rdpei* rdpei) {
  * @param context
  *     The rdpContext associated with the active RDP session.
  *
- * @param e
+ * @param args
  *     Event-specific arguments, mainly the name of the channel, and a
  *     reference to the associated plugin loaded for that channel by FreeRDP.
  */
 static void guac_rdp_rdpei_channel_connected(rdpContext* context,
-        ChannelConnectedEventArgs* e) {
+        ChannelConnectedEventArgs* args) {
 
     guac_client* client = ((rdp_freerdp_context*) context)->client;
     guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
     guac_rdp_rdpei* guac_rdpei = rdp_client->rdpei;
 
     /* Ignore connection event if it's not for the RDPEI channel */
-    if (strcmp(e->name, RDPEI_DVC_CHANNEL_NAME) != 0)
+    if (strcmp(args->name, RDPEI_DVC_CHANNEL_NAME) != 0)
         return;
 
     /* Store reference to the RDPEI plugin once it's connected */
-    RdpeiClientContext* rdpei = (RdpeiClientContext*) e->pInterface;
+    RdpeiClientContext* rdpei = (RdpeiClientContext*) args->pInterface;
     guac_rdpei->rdpei = rdpei;
 
     /* Declare level of multi-touch support */
-    guac_common_surface_set_multitouch(rdp_client->display->default_surface,
+    guac_display_layer_set_multitouch(guac_display_default_layer(rdp_client->display),
             GUAC_RDP_RDPEI_MAX_TOUCHES);
 
     guac_client_log(client, GUAC_LOG_DEBUG, "RDPEI channel will be used for "
@@ -108,19 +108,19 @@ static void guac_rdp_rdpei_channel_connected(rdpContext* context,
  * @param context
  *     The rdpContext associated with the active RDP session.
  *
- * @param e
+ * @param args
  *     Event-specific arguments, mainly the name of the channel, and a
  *     reference to the associated plugin loaded for that channel by FreeRDP.
  */
 static void guac_rdp_rdpei_channel_disconnected(rdpContext* context,
-        ChannelDisconnectedEventArgs* e) {
+        ChannelDisconnectedEventArgs* args) {
 
     guac_client* client = ((rdp_freerdp_context*) context)->client;
     guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
     guac_rdp_rdpei* guac_rdpei = rdp_client->rdpei;
 
     /* Ignore disconnection event if it's not for the RDPEI channel */
-    if (strcmp(e->name, RDPEI_DVC_CHANNEL_NAME) != 0)
+    if (strcmp(args->name, RDPEI_DVC_CHANNEL_NAME) != 0)
         return;
 
     /* Channel is no longer connected */

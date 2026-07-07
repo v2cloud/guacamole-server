@@ -31,6 +31,7 @@
 #include <guacamole/protocol.h>
 #include <guacamole/socket.h>
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -51,14 +52,121 @@
 #define GUAC_TERMINAL_OK          "\x1B[0n"
 
 /**
+ * Flag number for the DEC Private Mode Set (DECSET) operation that switches
+ * from the normal buffer to the alternate buffer.
+ *
+ * NOTE: Switching to the alternate buffer is common for text editors that wish
+ * to present a user interface yet preserve the original contents of the
+ * terminal.
+ */
+#define GUAC_TERMINAL_DECSET_USE_ALT_BUFFER 47
+
+/**
+ * Flag number for the DEC Private Mode Set (DECSET) operation that switches
+ * from the normal buffer to the alternate buffer AND clears the alternate
+ * buffer (but only if the alternate buffer wasn't already selected).
+ *
+ * @see GUAC_TERMINAL_DECSET_USE_ALT_BUFFER
+ */
+#define GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_CLEAR 1047
+
+/**
+ * Flag number for the DEC Private Mode Set (DECSET) operation that saves the
+ * current cursor location. The cursor location can later be restored through
+ * GUAC_TERMINAL_DECRST_RESTORE_CURSOR and related operations.
+ *
+ * @see GUAC_TERMINAL_DECRST_RESTORE_CURSOR
+ * @see GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_RESTORE_CURSOR
+ */
+#define GUAC_TERMINAL_DECSET_SAVE_CURSOR 1048
+
+/**
+ * Flag number for the DEC Private Mode Set (DECSET) operation that saves the
+ * current cursor location, switches to the alternate buffer, AND clears the
+ * alternate buffer if the alternate buffer was not already selected.
+ *
+ * This is effectively a combination of GUAC_TERMINAL_DECSET_SAVE_CURSOR and
+ * GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_CLEAR.
+ *
+ * @see GUAC_TERMINAL_DECSET_SAVE_CURSOR
+ * @see GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_CLEAR
+ */
+#define GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_SAVE_CURSOR_AND_CLEAR 1049
+
+/**
+ * Flag number for the DEC Private Mode Reset (DECRST) operation that switches
+ * from the alternate buffer to the normal buffer.
+ *
+ * @see GUAC_TERMINAL_DECSET_USE_ALT_BUFFER
+ */
+#define GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER 47
+
+/**
+ * Flag number for the DEC Private Mode Reset (DECRST) operation that switches
+ * from the alternate buffer to the normal buffer AND clears the normal buffer
+ * (but only if the normal buffer wasn't already selected).
+ *
+ * @see GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER
+ */
+#define GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_CLEAR 1047
+
+/**
+ * Flag number for the DEC Private Mode Set (DECSET) operation that restores
+ * the cursor location. The cursor location must have been previously saved
+ * through GUAC_TERMINAL_DECSET_SAVE_CURSOR or related operations.
+ *
+ * @see GUAC_TERMINAL_DECSET_SAVE_CURSOR
+ */
+#define GUAC_TERMINAL_DECRST_RESTORE_CURSOR 1048
+
+/**
+ * Flag number for the DEC Private Mode Reet (DECRST) operation that and
+ * restores the previously saved cursor location. The normal buffer is not
+ * cleared.
+ *
+ * @see GUAC_TERMINAL_DECSET_SAVE_CURSOR
+ * @see GUAC_TERMINAL_DECSET_USE_ALT_BUFFER
+ */
+#define GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_RESTORE_CURSOR 1049
+
+/**
+ * Parses a numeric terminal parameter, as may be accepted by console code
+ * sequences in general. Only integers between 0 and INT_MAX are parsed,
+ * inclusive. If a value cannot be parsed, 0 is returned.
+ *
+ * @param str
+ *    The terminal parameter to parse, as a null-terminated string.
+ *
+ * @return
+ *    The integer value of the provided string, or 0 if the string cannot be
+ *    parsed for any reason.
+ */
+static int guac_terminal_parse_numeric_param(const char* str) {
+
+    errno = 0;
+    unsigned long value = strtoul(str, NULL, 10);
+    if (errno || value > INT_MAX)
+        return 0;
+
+    return value;
+
+}
+
+/**
  * Advances the cursor to the next row, scrolling if the cursor would otherwise
  * leave the scrolling region. If the cursor is already outside the scrolling
  * region, the cursor is prevented from leaving the terminal bounds.
  *
  * @param term
  *     The guac_terminal whose cursor should be advanced to the next row.
+ *
+ * @param force_wrap
+ *     True if the line wrap was forced, false otherwise
  */
-static void guac_terminal_linefeed(guac_terminal* term) {
+static void guac_terminal_linefeed(guac_terminal* term, bool force_wrap) {
+
+    /* Pass through possible change in whether the current row was wrapped */
+    guac_terminal_buffer_set_wrapped(term->current_buffer, term->cursor_row, force_wrap);
 
     /* Scroll up if necessary */
     if (term->cursor_row == term->scroll_end)
@@ -221,7 +329,7 @@ int guac_terminal_echo(guac_terminal* term, unsigned char c) {
         case 0x0C: /* FF */
 
             /* Advance to next row */
-            guac_terminal_linefeed(term);
+            guac_terminal_linefeed(term, false);
 
             /* If automatic carriage return, fall through to CR handler */
             if (!term->automatic_carriage_return)
@@ -269,8 +377,10 @@ int guac_terminal_echo(guac_terminal* term, unsigned char c) {
 
             /* Wrap if necessary */
             if (term->cursor_col >= term->term_width) {
+
+                /* New line */
                 term->cursor_col = 0;
-                guac_terminal_linefeed(term);
+                guac_terminal_linefeed(term, true);
             }
 
             /* If insert mode, shift other characters right by 1 */
@@ -340,14 +450,14 @@ int guac_terminal_escape(guac_terminal* term, unsigned char c) {
 
         /* Index (IND) */
         case 'D':
-            guac_terminal_linefeed(term);
+            guac_terminal_linefeed(term, false);
             term->char_handler = guac_terminal_echo; 
             break;
 
         /* Next Line (NEL) */
         case 'E':
             guac_terminal_move_cursor(term, term->cursor_row, 0);
-            guac_terminal_linefeed(term);
+            guac_terminal_linefeed(term, false);
             term->char_handler = guac_terminal_echo; 
             break;
 
@@ -537,7 +647,7 @@ static int guac_terminal_parse_xterm256_index(guac_terminal* terminal,
 
 /**
  * Parses an xterm SGR sequence specifying the index of a color within the
- * 256-color palette, or specfying the RGB values of a color. The number of
+ * 256-color palette, or specifying the RGB values of a color. The number of
  * arguments required by these sequences varies. If a 256-color sequence is
  * recognized, the number of arguments parsed is returned.
  *
@@ -622,7 +732,7 @@ int guac_terminal_csi(guac_terminal* term, unsigned char c) {
 
             /* Finish parameter */
             argv_buffer[argv_length] = 0;
-            argv[argc++] = atoi(argv_buffer);
+            argv[argc++] = guac_terminal_parse_numeric_param(argv_buffer);
 
             /* Prepare for next parameter */
             argv_length = 0;
@@ -835,6 +945,32 @@ int guac_terminal_csi(guac_terminal* term, unsigned char c) {
 
                 break;
 
+            /* S: Scroll Up by amount */
+            case 'S':
+
+                /* Get move amount */
+                amount = argv[0];
+                if (amount == 0) amount = 1;
+
+                /* Scroll up */
+                guac_terminal_scroll_up(term, term->scroll_start,
+                        term->scroll_end, amount);
+
+                break;
+
+            /* T: Scroll Down by amount */
+            case 'T':
+
+                /* Get move amount */
+                amount = argv[0];
+                if (amount == 0) amount = 1;
+
+                /* Scroll Down */
+                guac_terminal_scroll_down(term, term->scroll_start,
+                        term->scroll_end, amount);
+
+                break;
+
             /* X: Erase characters (no scroll) */
             case 'X':
 
@@ -877,20 +1013,91 @@ int guac_terminal_csi(guac_terminal* term, unsigned char c) {
 
                 break;
 
-            /* h: Set Mode */
+            /* h: Set Mode (DECSET) */
             case 'h':
-             
-                /* Look up flag and set */ 
+
+                /* Save cursor for later restoration */
+                if (argv[0] == GUAC_TERMINAL_DECSET_SAVE_CURSOR
+                        || argv[0] == GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_SAVE_CURSOR_AND_CLEAR) {
+                    term->saved_cursor_row = term->cursor_row;
+                    term->saved_cursor_col = term->cursor_col;
+                }
+
+                if (term->current_buffer != term->alternate_buffer) {
+
+                    /* Switch to alternate buffer */
+                    if (argv[0] == GUAC_TERMINAL_DECSET_USE_ALT_BUFFER
+                            || argv[0] == GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_CLEAR
+                            || argv[0] == GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_SAVE_CURSOR_AND_CLEAR) {
+
+                        term->current_buffer = term->alternate_buffer;
+
+                        /* Update scrollbar bounds (the different buffers have differing levels of scrollback) */
+                        guac_terminal_scrollbar_set_bounds(term->scrollbar,
+                                -guac_terminal_get_available_scroll(term), 0);
+
+                    }
+
+                    /* Clear alternate buffer only if we were previously using
+                     * the normal buffer */
+                    if (argv[0] == GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_CLEAR
+                            || argv[0] == GUAC_TERMINAL_DECSET_USE_ALT_BUFFER_AND_SAVE_CURSOR_AND_CLEAR) {
+                        guac_terminal_clear_range(term,
+                                0, 0, term->term_height - 1, term->term_width - 1);
+                    }
+
+                }
+
+                /* Look up flag and set */
                 flag = __guac_terminal_get_flag(term, argv[0], private_mode_character);
                 if (flag != NULL)
                     *flag = true;
 
                 break;
 
-            /* l: Reset Mode */
+            /* l: Reset Mode (DECRST) */
             case 'l':
-              
-                /* Look up flag and clear */ 
+
+                if (term->current_buffer != term->normal_buffer) {
+
+                    /* Switch back to normal buffer */
+                    if (argv[0] == GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER
+                            || argv[0] == GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_CLEAR
+                            || argv[0] == GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_RESTORE_CURSOR) {
+
+                        term->current_buffer = term->normal_buffer;
+
+                        /* Update scrollbar bounds (the different buffers have differing levels of scrollback) */
+                        guac_terminal_scrollbar_set_bounds(term->scrollbar,
+                                -guac_terminal_get_available_scroll(term), 0);
+
+                        /* Redraw normal buffer content */
+                        guac_terminal_redraw_default_layer(term);
+                        
+                        /* Clear selection */
+                        term->text_selected = false;
+                        term->selection_committed = false;
+
+                    }
+
+                    /* Clear normal buffer only if we were previously using
+                     * the alternate buffer */
+                    if (argv[0] == GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_CLEAR) {
+                        guac_terminal_clear_range(term,
+                                0, 0, term->term_height - 1, term->term_width - 1);
+                    }
+
+                }
+
+                /* Restore previously saved cursor */
+                if (argv[0] == GUAC_TERMINAL_DECRST_RESTORE_CURSOR
+                        || argv[0] == GUAC_TERMINAL_DECRST_USE_NORMAL_BUFFER_AND_RESTORE_CURSOR) {
+                    guac_terminal_move_cursor(term,
+                            term->saved_cursor_row,
+                            term->saved_cursor_col);
+                }
+
+                /* Look up flag and clear */
                 flag = __guac_terminal_get_flag(term, argv[0], private_mode_character);
                 if (flag != NULL)
                     *flag = false;
@@ -1180,7 +1387,7 @@ int guac_terminal_open_pipe_stream(guac_terminal* term, unsigned char c) {
         length = 0;
 
         /* Parse parameter string as integer flags */
-        flags |= atoi(param);
+        flags |= guac_terminal_parse_numeric_param(param);
 
     }
 
@@ -1223,7 +1430,7 @@ int guac_terminal_set_scrollback(guac_terminal* term, unsigned char c) {
         length = 0;
 
         /* Assign scrollback size */
-        term->requested_scrollback = atoi(param);
+        term->requested_scrollback = guac_terminal_parse_numeric_param(param);
 
         /* Update scrollbar bounds */
         guac_terminal_scrollbar_set_bounds(term->scrollbar,
@@ -1241,7 +1448,6 @@ int guac_terminal_set_scrollback(guac_terminal* term, unsigned char c) {
     return 0;
 
 }
-
 
 int guac_terminal_window_title(guac_terminal* term, unsigned char c) {
 

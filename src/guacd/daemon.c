@@ -37,6 +37,7 @@
 #include <libgen.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +86,7 @@ static int redirect_fd(int fd, int flags) {
 
 /**
  * Turns the current process into a daemon through a series of fork() calls.
- * The standard I/O file desriptors for STDIN, STDOUT, and STDERR will be
+ * The standard I/O file descriptors for STDIN, STDOUT, and STDERR will be
  * redirected to /dev/null, and the working directory is changed to root.
  * Execution within the caller of this function will terminate before this
  * function returns, while execution within the daemonized child process will
@@ -426,10 +427,15 @@ int main(int argc, char* argv[]) {
         CRYPTO_set_locking_callback(guacd_openssl_locking_callback);
 #endif
 
-        /* Init SSL */
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+        /* Init OpenSSL for OpenSSL Versions < 1.1.0 */
         SSL_library_init();
         SSL_load_error_strings();
         ssl_context = SSL_CTX_new(SSLv23_server_method());
+#else
+        /* Set up OpenSSL for OpenSSL Versions >= 1.1.0 */
+        ssl_context = SSL_CTX_new(TLS_server_method());
+#endif
 
         /* Load key */
         if (config->key_file != NULL) {
@@ -532,6 +538,12 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        /* Set TCP_NODELAY to avoid any latency that would otherwise be added by the OS'
+         * networking stack and Nagle's algorithm */
+        const int SO_TRUE = 1;
+        setsockopt(connected_socket_fd, IPPROTO_TCP, TCP_NODELAY,
+                (const void*) &SO_TRUE, sizeof(SO_TRUE));
+
         /* Create parameters for connection thread */
         guacd_connection_thread_params* params = guac_mem_alloc(sizeof(guacd_connection_thread_params));
         if (params == NULL) {
@@ -560,7 +572,7 @@ int main(int argc, char* argv[]) {
         /*
          * FIXME: Clean up the proc map. This is not as straightforward as it
          * might seem, since the detached connection threads will attempt to
-         * remove the connection proccesses from the map when they complete,
+         * remove the connection processes from the map when they complete,
          * which will also happen upon shutdown. So there's a good chance that
          * this map cleanup will happen at the same time as the thread cleanup.
          * The map _does_ have locking mechanisms in place for ensuring thread

@@ -17,7 +17,6 @@
  * under the License.
  */
 
-
 #ifndef _GUAC_COMMON_DOT_CURSOR_H
 #define _GUAC_COMMON_DOT_CURSOR_H
 
@@ -42,7 +41,7 @@ extern const int guac_common_dot_cursor_height;
 extern const int guac_common_dot_cursor_stride;
 
 /**
- * The Cairo grapic format of the mouse cursor graphic.
+ * The Cairo graphic format of the mouse cursor graphic.
  */
 extern const cairo_format_t guac_common_dot_cursor_format;
 

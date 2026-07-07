@@ -34,6 +34,7 @@
 #endif
 
 #include <guacamole/client.h>
+#include <guacamole/display.h>
 #include <guacamole/mem.h>
 #include <guacamole/recording.h>
 
@@ -89,7 +90,7 @@ static int guac_vnc_join_pending_handler(guac_client* client) {
 
     /* Synchronize with current display */
     if (vnc_client->display != NULL) {
-        guac_common_display_dup(vnc_client->display, client, broadcast_socket);
+        guac_display_dup(vnc_client->display, broadcast_socket);
         guac_socket_flush(broadcast_socket);
     }
 
@@ -111,6 +112,9 @@ int guac_client_init(guac_client* client) {
     pthread_mutex_init(&vnc_client->tls_lock, NULL);
 #endif
 
+    /* Initialize the message lock. */
+    pthread_mutex_init(&(vnc_client->message_lock), NULL);
+
     /* Init clipboard */
     vnc_client->clipboard = guac_common_clipboard_alloc();
 
@@ -127,6 +131,11 @@ int guac_vnc_client_free_handler(guac_client* client) {
 
     guac_vnc_client* vnc_client = (guac_vnc_client*) client->data;
     guac_vnc_settings* settings = vnc_client->settings;
+
+    /* Ensure all background rendering processes are stopped before freeing
+     * underlying memory */
+    if (vnc_client->display != NULL)
+        guac_display_stop(vnc_client->display);
 
     /* Clean up VNC client*/
     rfbClient* rfb_client = vnc_client->rfb_client;
@@ -192,7 +201,7 @@ int guac_vnc_client_free_handler(guac_client* client) {
 
     /* Free display */
     if (vnc_client->display != NULL)
-        guac_common_display_free(vnc_client->display);
+        guac_display_free(vnc_client->display);
 
 #ifdef ENABLE_PULSE
     /* If audio enabled, stop streaming */
@@ -208,6 +217,9 @@ int guac_vnc_client_free_handler(guac_client* client) {
     /* Clean up TLS lock mutex. */
     pthread_mutex_destroy(&(vnc_client->tls_lock));
 #endif
+
+    /* Clean up the message lock. */
+    pthread_mutex_destroy(&(vnc_client->message_lock));
 
     /* Free generic data struct */
     guac_mem_free(client->data);

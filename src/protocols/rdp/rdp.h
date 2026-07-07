@@ -25,11 +25,10 @@
 #include "channels/disp.h"
 #include "channels/rdpei.h"
 #include "common/clipboard.h"
-#include "common/display.h"
 #include "common/list.h"
-#include "common/surface.h"
 #include "config.h"
 #include "fs.h"
+#include "input.h"
 #include "keyboard.h"
 #include "print-job.h"
 #include "settings.h"
@@ -42,13 +41,36 @@
 
 #include <freerdp/codec/color.h>
 #include <freerdp/freerdp.h>
+#include <freerdp/client/rail.h>
 #include <guacamole/audio.h>
 #include <guacamole/client.h>
+#include <guacamole/display.h>
+#include <guacamole/fifo.h>
+#include <guacamole/rwlock.h>
 #include <guacamole/recording.h>
 #include <winpr/wtypes.h>
 
 #include <pthread.h>
 #include <stdint.h>
+
+#ifdef HAVE_WINPR_ALIGNED
+#define GUAC_ALIGNED_FREE winpr_aligned_free
+#define GUAC_ALIGNED_MALLOC winpr_aligned_malloc
+#else
+#define GUAC_ALIGNED_FREE _aligned_free
+#define GUAC_ALIGNED_MALLOC _aligned_malloc
+#endif
+
+#ifdef FREERDP_HAS_CONTEXT
+#define GUAC_RDP_CONTEXT(rdp_instance) ((rdp_instance)->context)
+#else
+#define GUAC_RDP_CONTEXT(rdp_instance) ((rdp_instance))
+#endif
+
+/**
+ * The maximum number of input events to allow in the event queue.
+ */
+#define GUAC_RDP_INPUT_EVENT_QUEUE_SIZE 4096
 
 /**
  * RDP-specific client data.
@@ -83,13 +105,55 @@ typedef struct guac_rdp_client {
     /**
      * The display.
      */
-    guac_common_display* display;
+    guac_display* display;
 
     /**
      * The surface that GDI operations should draw to. RDP messages exist which
      * change this surface to allow drawing to occur off-screen.
      */
-    guac_common_surface* current_surface;
+    guac_display_layer* current_surface;
+
+    /**
+     * The current raw context that can be used to draw to Guacamole's default
+     * layer. This context is obtained prior to FreeRDP manipulation of the GDI
+     * buffer and closed when FreeRDP is done with the GDI buffer. If no
+     * drawing to the GDI is currently underway, this will be NULL.
+     */
+    guac_display_layer_raw_context* current_context;
+
+    /**
+     * Whether the graphical state of FreeRDP's GDI has changed since the last
+     * time a frame was sent to the client.
+     */
+    int gdi_modified;
+
+    /**
+     * The current instance of the guac_display render thread. If the thread
+     * has not yet been started, this will be NULL.
+     */
+    guac_display_render_thread* render_thread;
+
+    /**
+     * Queue of mouse, keyboard, and touch events. These events are accumulated
+     * and flushed within the RDP client thread to avoid spending excessive
+     * time within Guacamole's event handlers. If an attempt to send an RDP
+     * event to the RDP server takes a noticable amount of time, that time will
+     * otherwise block handling of Guacamole events, including critical events
+     * like "sync" (resulting in miscalculation of processing lag).
+     */
+    guac_fifo input_events;
+
+    /**
+     * Storage for the input_events queue (see above).
+     */
+    guac_rdp_input_event input_events_items[GUAC_RDP_INPUT_EVENT_QUEUE_SIZE];
+
+    /**
+     * FreeRDP event handle that is set with SetEvent() when at least one input
+     * event has been added to the input_events queue. When all input events
+     * have been processed, this event handle is cleared with ResetEvent().
+     */
+    HANDLE input_event_queued;
 
     /**
      * The current state of the keyboard with respect to the RDP session.
@@ -170,13 +234,19 @@ typedef struct guac_rdp_client {
      * from running when RDP data structures are allocated or freed
      * by the client thread.
      */
-    pthread_rwlock_t lock;
+    guac_rwlock lock;
 
     /**
      * Lock which synchronizes the sending of each RDP message, ensuring
      * attempts to send RDP messages never overlap.
      */
     pthread_mutex_t message_lock;
+
+    /**
+     * A pointer to the RAIL interface provided by the RDP client when rail is
+     * in use.
+     */
+    RailClientContext* rail_interface;
 
 } guac_rdp_client;
 
@@ -218,5 +288,32 @@ typedef struct rdp_freerdp_context {
  */
 void* guac_rdp_client_thread(void* data);
 
-#endif
+/**
+ * Enqueues the given input event for future processing by a call to
+ * guac_rdp_handle_input_events(). The values from the input event will be
+ * copied and stored independently of the provided pointer. Calling this
+ * function will automatically notify any threads waiting on the
+ * input_event_queued handle.
+ *
+ * @param rdp_client
+ *     The RDP client instance associated with the RDP session receiving the
+ *     event.
+ *
+ * @param input_event
+ *     The input event to add to the queue.
+ */
+void guac_rdp_input_event_enqueue(guac_rdp_client* rdp_client,
+        const guac_rdp_input_event* input_event);
 
+/**
+ * Processes all events that have been enqueued with
+ * guac_rdp_input_event_enqueue(), clearing the event queue and the state of
+ * the input_event_queued handle. Events are processed in the order they are
+ * received.
+ *
+ * @param rdp_client
+ *     The RDP client instance whose queued input events should be processed.
+ */
+void guac_rdp_handle_input_events(guac_rdp_client* rdp_client);
+
+#endif

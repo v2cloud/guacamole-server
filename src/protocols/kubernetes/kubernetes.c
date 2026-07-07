@@ -48,7 +48,7 @@
  *     The reason (event) that this callback was invoked.
  *
  * @param user
- *     Arbitrary data assocated with the WebSocket session. In some cases,
+ *     Arbitrary data associated with the WebSocket session. In some cases,
  *     this is actually event-specific data (such as the
  *     LWS_CALLBACK_OPENSSL_LOAD_EXTRA_CLIENT_VERIFY_CERT event).
  *
@@ -237,7 +237,8 @@ void* guac_kubernetes_client_thread(void* data) {
                 !settings->recording_exclude_output,
                 !settings->recording_exclude_mouse,
                 0, /* Touch events not supported */
-                settings->recording_include_keys);
+                settings->recording_include_keys,
+                settings->recording_write_existing);
     }
 
     /* Create terminal options with required parameters */
@@ -274,7 +275,8 @@ void* guac_kubernetes_client_thread(void* data) {
         guac_terminal_create_typescript(kubernetes_client->term,
                 settings->typescript_path,
                 settings->typescript_name,
-                settings->create_typescript_path);
+                settings->create_typescript_path,
+                settings->typescript_write_existing);
     }
 
     /* Init libwebsockets context creation parameters */
@@ -286,7 +288,7 @@ void* guac_kubernetes_client_thread(void* data) {
         .user = client
     };
 
-    /* Init WebSocket connection parameters which do not vary by Guacmaole
+    /* Init WebSocket connection parameters which do not vary by Guacamole
      * connection parameters or creation of future libwebsockets objects */
     struct lws_client_connect_info connection_info = {
         .host = settings->hostname,

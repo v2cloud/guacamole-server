@@ -17,7 +17,6 @@
  * under the License.
  */
 
-
 #ifndef _GUAC_TERMINAL_TYPES_H
 #define _GUAC_TERMINAL_TYPES_H
 
@@ -43,6 +42,11 @@
 #define GUAC_CHAR_CONTINUATION -1
 
 /**
+ * The ASCII code of space.
+ */
+#define GUAC_CHAR_SPACE 32
+
+/**
  * Terminal attributes, as can be applied to a single character.
  */
 typedef struct guac_terminal_attributes {
@@ -50,29 +54,29 @@ typedef struct guac_terminal_attributes {
     /**
      * Whether the character should be rendered bold.
      */
-    bool bold;
+    bool bold : 1;
 
     /**
      * Whether the character should be rendered with half brightness (faint
      * or low intensity).
      */
-    bool half_bright;
+    bool half_bright : 1;
+
+    /**
+     * Whether the associated character is highlighted by the cursor.
+     */
+    bool cursor : 1;
 
     /**
      * Whether the character should be rendered with reversed colors
      * (background becomes foreground and vice-versa).
      */
-    bool reverse;
-
-    /**
-     * Whether the associated character is highlighted by the cursor.
-     */
-    bool cursor;
+    bool reverse : 1;
 
     /**
      * Whether to render the character with underscore.
      */
-    bool underscore;
+    bool underscore : 1;
 
     /**
      * The foreground color of this character.

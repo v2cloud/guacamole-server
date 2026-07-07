@@ -23,12 +23,12 @@
 #include "config.h"
 
 #include "common/clipboard.h"
-#include "common/display.h"
 #include "common/iconv.h"
-#include "common/surface.h"
+#include "display.h"
 #include "settings.h"
 
 #include <guacamole/client.h>
+#include <guacamole/display.h>
 #include <guacamole/layer.h>
 #include <rfb/rfbclient.h>
 
@@ -45,6 +45,12 @@
 #include <guacamole/recording.h>
 
 #include <pthread.h>
+
+/**
+ * The ID of the RFB client screen. If multi-screen support is added, more than
+ * one ID will be needed as well.
+ */
+#define GUAC_VNC_SCREEN_ID 1
 
 /**
  * VNC-specific client data.
@@ -64,6 +70,11 @@ typedef struct guac_vnc_client {
 #endif
 
     /**
+     * Lock which synchronizes messages sent to VNC server.
+     */
+    pthread_mutex_t message_lock;
+
+    /**
      * The underlying VNC client.
      */
     rfbClient* rfb_client;
@@ -73,6 +84,12 @@ typedef struct guac_vnc_client {
      * rfbClient.
      */
     MallocFrameBufferProc rfb_MallocFrameBuffer;
+
+    /**
+     * The original CopyRect processing procedure provided by the initialized
+     * rfbClient.
+     */
+    GotCopyRectProc rfb_GotCopyRect;
 
     /**
      * Whether copyrect  was used to produce the latest update received
@@ -88,7 +105,19 @@ typedef struct guac_vnc_client {
     /**
      * The current display state.
      */
-    guac_common_display* display;
+    guac_display* display;
+
+    /**
+     * The context of the current drawing (update) operation, if any. If no
+     * operation is in progress, this will be NULL.
+     */
+    guac_display_layer_raw_context* current_context;
+
+    /**
+     * The current instance of the guac_display render thread. If the thread
+     * has not yet been started, this will be NULL.
+     */
+    guac_display_render_thread* render_thread;
 
     /**
      * Internal clipboard.
@@ -134,6 +163,19 @@ typedef struct guac_vnc_client {
      * Clipboard encoding-specific writer.
      */
     guac_iconv_write* clipboard_writer;
+
+#ifdef LIBVNC_HAS_RESIZE_SUPPORT
+    /**
+     * Whether or not the server has sent the required message to initialize
+     * the screen data in the client.
+     */
+    bool rfb_screen_initialized;
+
+    /**
+     * Whether or not the client has sent it's starting size to the server.
+     */
+    bool rfb_initial_resize;
+#endif
 
 } guac_vnc_client;
 

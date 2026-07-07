@@ -109,7 +109,7 @@ static uintptr_t get_lock_count(uintptr_t value) {
  * in the least-significant nibble, and the count in the rest.
  *
  * @param flag
- *     A flag indiciating which lock, if any, is held by the current thread.
+ *     A flag indicating which lock, if any, is held by the current thread.
  *
  * @param count
  *     The depth of the lock attempt by the current thread, i.e. the number of
@@ -139,7 +139,7 @@ static void* get_value_from_flag_and_count(
 static int would_overflow_count(uintptr_t current_count) {
 
     /**
-     * The count will overflow if it's already equal or greated to the maximum
+     * The count will overflow if it's already equal or greater to the maximum
      * possible value that can be stored in a uintptr_t excluding the first nibble.
      */
     return current_count >= (UINTPTR_MAX >> 4);
@@ -179,7 +179,7 @@ int guac_rwlock_acquire_write_lock(guac_rwlock* reentrant_rwlock) {
      * write lock by another function without the caller knowing about it. This
      * shouldn't cause any issues, however.
      */
-    if (key_value == GUAC_REENTRANT_LOCK_READ_LOCK)
+    if (flag == GUAC_REENTRANT_LOCK_READ_LOCK)
         pthread_rwlock_unlock(&(reentrant_rwlock->lock));
 
     /* Acquire the write lock */

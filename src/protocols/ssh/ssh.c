@@ -39,6 +39,7 @@
 #include <guacamole/recording.h>
 #include <guacamole/socket.h>
 #include <guacamole/timestamp.h>
+#include <guacamole/wol-constants.h>
 #include <guacamole/wol.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -133,6 +134,33 @@ static guac_common_ssh_user* guac_ssh_get_user(guac_client* client) {
         guac_client_log(client, GUAC_LOG_INFO,
                 "Auth key successfully imported.");
 
+        /* Import public key, if available. */
+        if (settings->public_key_base64 != NULL) {
+
+            guac_client_log(client, GUAC_LOG_DEBUG,
+                    "Attempting public key import");
+
+            /* Attempt to read public key */
+            if (guac_common_ssh_user_import_public_key(user,
+                        settings->public_key_base64)) {
+
+                /* Public key import fails. */
+                guac_client_abort(client,
+                       GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED,
+                       "Auth public key import failed: %s",
+                        guac_common_ssh_key_error());
+
+                guac_common_ssh_destroy_user(user);
+                return NULL;
+
+            }
+
+            /* Success */
+            guac_client_log(client, GUAC_LOG_INFO,
+                    "Auth public key successfully imported.");
+
+        }
+
     } /* end if key given */
 
     /* If available, get password from settings */
@@ -207,17 +235,36 @@ void* ssh_client_thread(void* data) {
 
     /* If Wake-on-LAN is enabled, attempt to wake. */
     if (settings->wol_send_packet) {
-        guac_client_log(client, GUAC_LOG_DEBUG, "Sending Wake-on-LAN packet, "
-                "and pausing for %d seconds.", settings->wol_wait_time);
 
-        /* Send the Wake-on-LAN request. */
-        if (guac_wol_wake(settings->wol_mac_addr, settings->wol_broadcast_addr,
-                settings->wol_udp_port))
+        /**
+         * If wait time is set, send the wake packet and try to connect to the
+         * server, failing if the server does not respond.
+         */
+        if (settings->wol_wait_time > 0) {
+            guac_client_log(client, GUAC_LOG_DEBUG, "Sending Wake-on-LAN packet, "
+                    "and pausing for %d seconds.", settings->wol_wait_time);
+
+            /* Send the Wake-on-LAN request and wait until the server is responsive. */
+            if (guac_wol_wake_and_wait(settings->wol_mac_addr,
+                    settings->wol_broadcast_addr,
+                    settings->wol_udp_port,
+                    settings->wol_wait_time,
+                    GUAC_WOL_DEFAULT_CONNECT_RETRIES,
+                    settings->hostname,
+                    settings->port,
+                    settings->timeout)) {
+                guac_client_log(client, GUAC_LOG_ERROR, "Failed to send WOL packet or connect to remote server.");
+                return NULL;
+            }
+        }
+
+        /* Just send the packet and continue the connection, or return if failed. */
+        else if(guac_wol_wake(settings->wol_mac_addr,
+                    settings->wol_broadcast_addr,
+                    settings->wol_udp_port)) {
+            guac_client_log(client, GUAC_LOG_ERROR, "Failed to send WOL packet.");
             return NULL;
-
-        /* If wait time is specified, sleep for that amount of time. */
-        if (settings->wol_wait_time > 0)
-            guac_timestamp_msleep(settings->wol_wait_time * 1000);
+        }
     }
 
     /* Init SSH base libraries */
@@ -238,7 +285,8 @@ void* ssh_client_thread(void* data) {
                 !settings->recording_exclude_output,
                 !settings->recording_exclude_mouse,
                 0, /* Touch events not supported */
-                settings->recording_include_keys);
+                settings->recording_include_keys,
+                settings->recording_write_existing);
     }
 
     /* Create terminal options with required parameters */
@@ -274,7 +322,8 @@ void* ssh_client_thread(void* data) {
         guac_terminal_create_typescript(ssh_client->term,
                 settings->typescript_path,
                 settings->typescript_name,
-                settings->create_typescript_path);
+                settings->create_typescript_path,
+                settings->typescript_write_existing);
     }
 
     /* Get user and credentials */
@@ -289,7 +338,8 @@ void* ssh_client_thread(void* data) {
 
     /* Open SSH session */
     ssh_client->session = guac_common_ssh_create_session(client,
-            settings->hostname, settings->port, ssh_client->user, settings->server_alive_interval,
+            settings->hostname, settings->port, ssh_client->user,
+            settings->timeout, settings->server_alive_interval,
             settings->host_key, guac_ssh_get_credential);
     if (ssh_client->session == NULL) {
         /* Already aborted within guac_common_ssh_create_session() */
@@ -317,7 +367,6 @@ void* ssh_client_thread(void* data) {
         }
     }
 
-
 #ifdef ENABLE_SSH_AGENT
     /* Start SSH agent forwarding, if enabled */
     if (ssh_client->enable_agent) {
@@ -341,8 +390,8 @@ void* ssh_client_thread(void* data) {
         guac_client_log(client, GUAC_LOG_DEBUG, "Reconnecting for SFTP...");
         ssh_client->sftp_session =
             guac_common_ssh_create_session(client, settings->hostname,
-                    settings->port, ssh_client->user, settings->server_alive_interval,
-                    settings->host_key, NULL);
+                    settings->port, ssh_client->user, settings->timeout,
+                    settings->server_alive_interval, settings->host_key, NULL);
         if (ssh_client->sftp_session == NULL) {
             /* Already aborted within guac_common_ssh_create_session() */
             return NULL;

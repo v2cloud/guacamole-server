@@ -182,7 +182,8 @@ struct guac_client {
 
     /**
      * Lock which is acquired when the pending users list is being manipulated,
-     * or when the pending users list is being iterated.
+     * or iterated, or when checking/altering the
+     * __pending_users_thread_started flag.
      */
     guac_rwlock __pending_users_lock;
 
@@ -192,18 +193,14 @@ struct guac_client {
      * use within the client. This will be NULL until the first user joins
      * the connection, as it is lazily instantiated at that time.
      */
-    timer_t __pending_users_timer;
+    pthread_t __pending_users_thread;
 
     /**
-     * A flag storing the current state of the pending users timer.
+     * Whether the pending users thread has started for this guac_client. The
+     * __pending_users_lock must be acquired before checking or altering this
+     * value.
      */
-    int __pending_users_timer_state;
-
-    /**
-     * A mutex that must be acquired before modifying or checking the value of
-     * the timer state.
-     */
-    pthread_mutex_t __pending_users_timer_mutex;
+    int __pending_users_thread_started;
 
     /**
      * The first user within the list of connected users who have not yet had
@@ -327,7 +324,7 @@ guac_client* guac_client_alloc();
 /**
  * Free all resources associated with the given client.
  *
- * @param client The proxy client to free all reasources of.
+ * @param client The proxy client to free all resources of.
  */
 void guac_client_free(guac_client* client);
 
@@ -586,17 +583,46 @@ void* guac_client_for_user(guac_client* client, guac_user* user,
         guac_user_callback* callback, void* data);
 
 /**
- * Marks the end of the current frame by sending a "sync" instruction to
- * all connected users. This instruction will contain the current timestamp.
- * The last_sent_timestamp member of guac_client will be updated accordingly.
+ * Marks the end of the current frame by sending a "sync" instruction to all
+ * connected users, where the number of input frames that were considered in
+ * creating this frame is either unknown or inapplicable. This instruction will
+ * contain the current timestamp. The last_sent_timestamp member of guac_client
+ * will be updated accordingly.
  *
  * If an error occurs sending the instruction, a non-zero value is
  * returned, and guac_error is set appropriately.
  *
- * @param client The guac_client which has finished a frame.
- * @return Zero on success, non-zero on error.
+ * @param client
+ *     The guac_client which has finished a frame.
+ *
+ * @return
+ *     Zero on success, non-zero on error.
  */
 int guac_client_end_frame(guac_client* client);
+
+/**
+ * Marks the end of the current frame by sending a "sync" instruction to all
+ * connected users, where that frame may combine or otherwise represent the
+ * changes of an arbitrary number of input frames. This instruction will
+ * contain the current timestamp, as well as the number of frames that were
+ * considered in creating that frame.  The last_sent_timestamp member of
+ * guac_client will be updated accordingly.
+ *
+ * If an error occurs sending the instruction, a non-zero value is
+ * returned, and guac_error is set appropriately.
+ *
+ * @param client
+ *     The guac_client which has finished a frame.
+ *
+ * @param frames
+ *     The number of distinct frames that were considered or combined when
+ *     generating the current frame, or zero if the boundaries of relevant
+ *     frames are unknown.
+ *
+ * @return
+ *     Zero on success, non-zero on error.
+ */
+int guac_client_end_multiple_frames(guac_client* client, int frames);
 
 /**
  * Initializes the given guac_client using the initialization routine provided

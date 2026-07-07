@@ -30,6 +30,7 @@
 #include "user-handlers.h"
 
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -123,31 +124,39 @@ int __guac_handle_sync(guac_user* user, int argc, char** argv) {
         /* Calculate length of frame, including network and processing lag */
         frame_duration = current - timestamp;
 
-        /* Update lag statistics if at least one frame has been rendered */
+        /* Calculate processing lag portion of length of frame */
+        int frame_processing_lag = 0;
         if (user->last_frame_duration != 0) {
 
             /* Calculate lag using the previous frame as a baseline */
-            int processing_lag = frame_duration - user->last_frame_duration;
+            frame_processing_lag = frame_duration - user->last_frame_duration;
 
             /* Adjust back to zero if cumulative error leads to a negative
              * value */
-            if (processing_lag < 0)
-                processing_lag = 0;
-
-            user->processing_lag = processing_lag;
+            if (frame_processing_lag < 0)
+                frame_processing_lag = 0;
 
         }
 
-        /* Record baseline duration of frame by excluding lag */
-        user->last_frame_duration = frame_duration - user->processing_lag;
+        /* Record baseline duration of frame by excluding lag (this is the
+         * network round-trip time) */
+        int estimated_rtt = frame_duration - frame_processing_lag;
+        user->last_frame_duration = estimated_rtt;
+
+        /* Calculate cumulative accumulated processing lag relative to server timeline */
+        int processing_lag = current - user->last_received_timestamp - estimated_rtt;
+        if (processing_lag < 0)
+            processing_lag = 0;
+
+        user->processing_lag = processing_lag;
 
     }
 
     /* Log received timestamp and calculated lag (at TRACE level only) */
     guac_user_log(user, GUAC_LOG_TRACE,
             "User confirmation of frame %" PRIu64 "ms received "
-            "at %" PRIu64 "ms (processing_lag=%ims)",
-            timestamp, current, user->processing_lag);
+            "at %" PRIu64 "ms (processing_lag=%ims, estimated_rtt=%ims)",
+            timestamp, current, user->processing_lag, user->last_frame_duration);
 
     if (user->sync_handler)
         return user->sync_handler(user, timestamp);
@@ -364,7 +373,14 @@ int __guac_handle_size(guac_user* user, int argc, char** argv) {
         return user->size_handler(
             user,
             atoi(argv[0]), /* width */
-            atoi(argv[1])  /* height */
+            atoi(argv[1]), /* height */
+            (argc >= 3 ? atoi(argv[2]) : 0),       /* Monitor x-position */
+            (argc >= 4 ? atoi(argv[3]) : 0),       /* Top offset */
+            /* Left offset: INT_MIN signals "not provided" so the protocol
+             * handler can fall back to its legacy horizontal-row layout
+             * (cumulative sum of widths by x_position) for older clients
+             * that do not send a 5th argument. */
+            (argc >= 5 ? atoi(argv[4]) : INT_MIN)
         );
     return 0;
 }

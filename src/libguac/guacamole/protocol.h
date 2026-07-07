@@ -291,7 +291,7 @@ int guac_protocol_send_touch(guac_socket* socket, int id, int x, int y,
  *     socket directly.
  *
  * @param socket The guac_socket connection to use.
- * @param index The integer index of the stram to send the protocol
+ * @param index The integer index of the stream to send the protocol
  *              data over.
  * @param data A string containing protocol data, which must be UTF-8
  *             encoded and null-terminated.
@@ -341,7 +341,7 @@ int guac_protocol_send_set(guac_socket* socket, const guac_layer* layer,
 
 /**
  * Sends a set instruction over the given guac_socket connection. This function
- * behavies identically to guac_protocol_send_set() except that the provided
+ * behaves identically to guac_protocol_send_set() except that the provided
  * parameter value is an integer, rather than a string.
  *
  * If an error occurs sending the instruction, a non-zero value is
@@ -384,11 +384,22 @@ int guac_protocol_send_select(guac_socket* socket, const char* protocol);
  * If an error occurs sending the instruction, a non-zero value is
  * returned, and guac_error is set appropriately.
  *
- * @param socket The guac_socket connection to use.
- * @param timestamp The current timestamp (in milliseconds).
- * @return Zero on success, non-zero on error.
+ * @param socket
+ *     The guac_socket connection to use.
+ *
+ * @param timestamp
+ *     The current timestamp (in milliseconds).
+ *
+ * @param frames
+ *     The number of distinct frames that were considered or combined when
+ *     generating the frame terminated by this instruction, or zero if the
+ *     boundaries of relevant frames are unknown.
+ *
+ * @return
+ *     Zero on success, non-zero on error.
  */
-int guac_protocol_send_sync(guac_socket* socket, guac_timestamp timestamp);
+int guac_protocol_send_sync(guac_socket* socket, guac_timestamp timestamp,
+        int frames);
 
 /* OBJECT INSTRUCTIONS */
 

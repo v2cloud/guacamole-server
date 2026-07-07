@@ -40,7 +40,6 @@ nodist_libguac_client_rdp_la_SOURCES =  \
 libguac_client_rdp_la_SOURCES =                  \
     argv.c                                       \
     beep.c                                       \
-    bitmap.c                                     \
     channels/audio-input/audio-buffer.c          \
     channels/audio-input/audio-input.c           \
     channels/cliprdr.c                           \
@@ -57,6 +56,7 @@ libguac_client_rdp_la_SOURCES =                  \
     channels/rdpdr/rdpdr-printer.c               \
     channels/rdpdr/rdpdr.c                       \
     channels/rdpei.c                             \
+    channels/rdpgfx.c                            \
     channels/rdpsnd/rdpsnd-messages.c            \
     channels/rdpsnd/rdpsnd.c                     \
     client.c                                     \
@@ -66,8 +66,8 @@ libguac_client_rdp_la_SOURCES =                  \
     error.c                                      \
     fs.c                                         \
     gdi.c                                        \
-    glyph.c                                      \
     input.c                                      \
+    input-queue.c                                \
     keyboard.c                                   \
     keymap.c                                     \
     log.c                                        \
@@ -86,7 +86,6 @@ libguac_client_rdp_la_SOURCES =                  \
 noinst_HEADERS =                                 \
     argv.h                                       \
     beep.h                                       \
-    bitmap.h                                     \
     channels/audio-input/audio-buffer.h          \
     channels/audio-input/audio-input.h           \
     channels/cliprdr.h                           \
@@ -103,6 +102,7 @@ noinst_HEADERS =                                 \
     channels/rdpdr/rdpdr-printer.h               \
     channels/rdpdr/rdpdr.h                       \
     channels/rdpei.h                             \
+    channels/rdpgfx.h                            \
     channels/rdpsnd/rdpsnd-messages.h            \
     channels/rdpsnd/rdpsnd.h                     \
     client.h                                     \
@@ -112,7 +112,6 @@ noinst_HEADERS =                                 \
     error.h                                      \
     fs.h                                         \
     gdi.h                                        \
-    glyph.h                                      \
     input.h                                      \
     keyboard.h                                   \
     keymap.h                                     \
@@ -156,7 +155,7 @@ freerdp_LTLIBRARIES =            \
     libguac-common-svc-client.la \
     libguacai-client.la
 
-freerdpdir = @FREERDP2_PLUGIN_DIR@
+freerdpdir = @FREERDP_PLUGIN_DIR@
 
 #
 # Common SVC plugin (shared by RDPDR, RDPSND, etc.)
@@ -227,7 +226,9 @@ BUILT_SOURCES =                         \
 
 rdp_keymaps =                                \
     $(srcdir)/keymaps/base.keymap            \
+    $(srcdir)/keymaps/base_altgr.keymap      \
     $(srcdir)/keymaps/failsafe.keymap        \
+    $(srcdir)/keymaps/cs-cz-qwertz.keymap    \
     $(srcdir)/keymaps/de_de_qwertz.keymap    \
     $(srcdir)/keymaps/de_ch_qwertz.keymap    \
     $(srcdir)/keymaps/en_gb_qwerty.keymap    \
@@ -235,6 +236,7 @@ rdp_keymaps =                                \
     $(srcdir)/keymaps/es_es_qwerty.keymap    \
     $(srcdir)/keymaps/es_latam_qwerty.keymap \
     $(srcdir)/keymaps/fr_be_azerty.keymap    \
+    $(srcdir)/keymaps/fr_ca_qwerty.keymap    \
     $(srcdir)/keymaps/fr_ch_qwertz.keymap    \
     $(srcdir)/keymaps/fr_fr_azerty.keymap    \
     $(srcdir)/keymaps/hu_hu_qwertz.keymap    \
@@ -243,6 +245,8 @@ rdp_keymaps =                                \
     $(srcdir)/keymaps/no_no_qwerty.keymap    \
     $(srcdir)/keymaps/pl_pl_qwerty.keymap    \
     $(srcdir)/keymaps/pt_br_qwerty.keymap    \
+    $(srcdir)/keymaps/pt_pt_qwerty.keymap    \
+    $(srcdir)/keymaps/ro_ro_qwerty.keymap    \
     $(srcdir)/keymaps/sv_se_qwerty.keymap    \
     $(srcdir)/keymaps/da_dk_qwerty.keymap    \
     $(srcdir)/keymaps/tr_tr_qwerty.keymap
@@ -257,4 +261,3 @@ EXTRA_DIST =                           \
     $(rdp_keymaps)                     \
     keymaps/generate.pl                \
     plugins/generate-entry-wrappers.pl
-

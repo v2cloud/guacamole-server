@@ -17,382 +17,215 @@
  * under the License.
  */
 
-#include "bitmap.h"
 #include "color.h"
-#include "common/display.h"
-#include "common/surface.h"
 #include "rdp.h"
 #include "settings.h"
 
 #include <cairo/cairo.h>
 #include <freerdp/freerdp.h>
+#include <freerdp/gdi/gdi.h>
 #include <freerdp/graphics.h>
 #include <freerdp/primary.h>
+#include <freerdp/version.h>
+#include <guacamole/assert.h>
 #include <guacamole/client.h>
+#include <guacamole/display.h>
 #include <guacamole/protocol.h>
+#include <guacamole/protocol-constants.h>
 #include <winpr/wtypes.h>
 
+#include <pthread.h>
 #include <stddef.h>
-#include <stddef.h>
 
-guac_transfer_function guac_rdp_rop3_transfer_function(guac_client* client,
-        int rop3) {
-
-    /* Translate supported ROP3 opcodes into composite modes */
-    switch (rop3) {
-
-        /* "DSon" !(src | dest) */
-        case 0x11: return GUAC_TRANSFER_BINARY_NOR;
-
-        /* "DSna" !src & dest */
-        case 0x22: return GUAC_TRANSFER_BINARY_NSRC_AND;
-
-        /* "Sn" !src */
-        case 0x33: return GUAC_TRANSFER_BINARY_NSRC;
-
-        /* "SDna" (src & !dest) */
-        case 0x44: return GUAC_TRANSFER_BINARY_NDEST_AND;
-
-        /* "Dn" !dest */
-        case 0x55: return GUAC_TRANSFER_BINARY_NDEST;
-
-        /* "SRCINVERT" (src ^ dest) */
-        case 0x66: return GUAC_TRANSFER_BINARY_XOR;
-
-        /* "DSan" !(src & dest) */
-        case 0x77: return GUAC_TRANSFER_BINARY_NAND;
-
-        /* "SRCAND" (src & dest) */
-        case 0x88: return GUAC_TRANSFER_BINARY_AND;
-
-        /* "DSxn" !(src ^ dest) */
-        case 0x99: return GUAC_TRANSFER_BINARY_XNOR;
-
-        /* "MERGEPAINT" (!src | dest)*/
-        case 0xBB: return GUAC_TRANSFER_BINARY_NSRC_OR;
-
-        /* "SDno" (src | !dest) */
-        case 0xDD: return GUAC_TRANSFER_BINARY_NDEST_OR;
-
-        /* "SRCPAINT" (src | dest) */
-        case 0xEE: return GUAC_TRANSFER_BINARY_OR;
-
-        /* 0x00 = "BLACKNESS" (0) */
-        /* 0xAA = "NOP" (dest) */
-        /* 0xCC = "SRCCOPY" (src) */
-        /* 0xFF = "WHITENESS" (1) */
-
-    }
-
-    /* Log warning if ROP3 opcode not supported */
-    guac_client_log(client, GUAC_LOG_INFO, "guac_rdp_rop3_transfer_function: "
-            "UNSUPPORTED opcode = 0x%02X", rop3);
-
-    /* Default to BINARY_SRC */
-    return GUAC_TRANSFER_BINARY_SRC;
-
-}
-
-BOOL guac_rdp_gdi_dstblt(rdpContext* context, const DSTBLT_ORDER* dstblt) {
-
-    guac_client* client = ((rdp_freerdp_context*) context)->client;
-    guac_common_surface* current_surface = ((guac_rdp_client*) client->data)->current_surface;
-
-    int x = dstblt->nLeftRect;
-    int y = dstblt->nTopRect;
-    int w = dstblt->nWidth;
-    int h = dstblt->nHeight;
-
-    switch (dstblt->bRop) {
-
-        /* Blackness */
-        case 0:
-
-            /* Send black rectangle */
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    0x00, 0x00, 0x00, 0xFF);
-            break;
-
-        /* DSTINVERT */
-        case 0x55:
-            guac_common_surface_transfer(current_surface, x, y, w, h,
-                                         GUAC_TRANSFER_BINARY_NDEST, current_surface, x, y);
-            break;
-
-        /* NOP */
-        case 0xAA:
-            break;
-
-        /* Whiteness */
-        case 0xFF:
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    0xFF, 0xFF, 0xFF, 0xFF);
-            break;
-
-        /* Unsupported ROP3 */
-        default:
-            guac_client_log(client, GUAC_LOG_INFO,
-                    "guac_rdp_gdi_dstblt(rop3=0x%x)", dstblt->bRop);
-
-    }
-
-    return TRUE;
-
-}
-
-BOOL guac_rdp_gdi_patblt(rdpContext* context, PATBLT_ORDER* patblt) {
-
-    /*
-     * Note that this is not a full implementation of PATBLT. This is a
-     * fallback implementation which only renders a solid block of background
-     * color using the specified ROP3 operation, ignoring whatever brush
-     * was actually specified.
-     *
-     * As libguac-client-rdp explicitly tells the server not to send PATBLT,
-     * well-behaved RDP servers will not use this operation at all, while
-     * others will at least have a fallback.
-     */
-
-    /* Get client and current layer */
-    guac_client* client = ((rdp_freerdp_context*) context)->client;
-    guac_common_surface* current_surface =
-        ((guac_rdp_client*) client->data)->current_surface;
-
-    int x = patblt->nLeftRect;
-    int y = patblt->nTopRect;
-    int w = patblt->nWidth;
-    int h = patblt->nHeight;
-
-    /*
-     * Warn that rendering is a fallback, as the server should not be sending
-     * this order.
-     */
-    guac_client_log(client, GUAC_LOG_INFO, "Using fallback PATBLT (server is ignoring "
-            "negotiated client capabilities)");
-
-    /* Render rectangle based on ROP */
-    switch (patblt->bRop) {
-
-        /* If blackness, send black rectangle */
-        case 0x00:
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    0x00, 0x00, 0x00, 0xFF);
-            break;
-
-        /* If NOP, do nothing */
-        case 0xAA:
-            break;
-
-        /* If operation is just a copy, send foreground only */
-        case 0xCC:
-        case 0xF0:
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    (patblt->foreColor >> 16) & 0xFF,
-                    (patblt->foreColor >> 8 ) & 0xFF,
-                    (patblt->foreColor      ) & 0xFF,
-                    0xFF);
-            break;
-
-        /* If whiteness, send white rectangle */
-        case 0xFF:
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    0xFF, 0xFF, 0xFF, 0xFF);
-            break;
-
-        /* Otherwise, invert entire rect */
-        default:
-            guac_common_surface_transfer(current_surface, x, y, w, h,
-                                         GUAC_TRANSFER_BINARY_NDEST, current_surface, x, y);
-
-    }
-
-    return TRUE;
-
-}
-
-BOOL guac_rdp_gdi_scrblt(rdpContext* context, const SCRBLT_ORDER* scrblt) {
-
-    guac_client* client = ((rdp_freerdp_context*) context)->client;
-    guac_common_surface* current_surface = ((guac_rdp_client*) client->data)->current_surface;
-    
-    int x = scrblt->nLeftRect;
-    int y = scrblt->nTopRect;
-    int w = scrblt->nWidth;
-    int h = scrblt->nHeight;
-
-    int x_src = scrblt->nXSrc;
-    int y_src = scrblt->nYSrc;
-
-    guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
-
-    /* Copy screen rect to current surface */
-    guac_common_surface_copy(rdp_client->display->default_surface,
-            x_src, y_src, w, h, current_surface, x, y);
-
-    return TRUE;
-
-}
-
-BOOL guac_rdp_gdi_memblt(rdpContext* context, MEMBLT_ORDER* memblt) {
-
-    guac_client* client = ((rdp_freerdp_context*) context)->client;
-    guac_common_surface* current_surface = ((guac_rdp_client*) client->data)->current_surface;
-    guac_rdp_bitmap* bitmap = (guac_rdp_bitmap*) memblt->bitmap;
-
-    int x = memblt->nLeftRect;
-    int y = memblt->nTopRect;
-    int w = memblt->nWidth;
-    int h = memblt->nHeight;
-
-    int x_src = memblt->nXSrc;
-    int y_src = memblt->nYSrc;
-
-    /* Make sure that the received bitmap is not NULL before processing */
-    if (bitmap == NULL) {
-        guac_client_log(client, GUAC_LOG_INFO, "NULL bitmap found in memblt instruction.");
-        return TRUE;
-    }
-
-    switch (memblt->bRop) {
-
-        /* If blackness, send black rectangle */
-        case 0x00:
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    0x00, 0x00, 0x00, 0xFF);
-            break;
-
-        /* If NOP, do nothing */
-        case 0xAA:
-            break;
-
-        /* If operation is just SRC, simply copy */
-        case 0xCC: 
-
-            /* If not cached, cache if necessary */
-            if (bitmap->layer == NULL && bitmap->used >= 1)
-                guac_rdp_cache_bitmap(context, memblt->bitmap);
-
-            /* If not cached, send as PNG */
-            if (bitmap->layer == NULL) {
-                if (memblt->bitmap->data != NULL) {
-
-                    /* Create surface from image data */
-                    cairo_surface_t* surface = cairo_image_surface_create_for_data(
-                        memblt->bitmap->data + 4*(x_src + y_src*memblt->bitmap->width),
-                        CAIRO_FORMAT_RGB24, w, h, 4*memblt->bitmap->width);
-
-                    /* Send surface to buffer */
-                    guac_common_surface_draw(current_surface, x, y, surface);
-
-                    /* Free surface */
-                    cairo_surface_destroy(surface);
-
-                }
-            }
-
-            /* Otherwise, copy */
-            else
-                guac_common_surface_copy(bitmap->layer->surface,
-                        x_src, y_src, w, h, current_surface, x, y);
-
-            /* Increment usage counter */
-            ((guac_rdp_bitmap*) bitmap)->used++;
-
-            break;
-
-        /* If whiteness, send white rectangle */
-        case 0xFF:
-            guac_common_surface_set(current_surface, x, y, w, h,
-                    0xFF, 0xFF, 0xFF, 0xFF);
-            break;
-
-        /* Otherwise, use transfer */
-        default:
-
-            /* If not available as a surface, make available. */
-            if (bitmap->layer == NULL)
-                guac_rdp_cache_bitmap(context, memblt->bitmap);
-
-            guac_common_surface_transfer(bitmap->layer->surface,
-                    x_src, y_src, w, h,
-                    guac_rdp_rop3_transfer_function(client, memblt->bRop),
-                    current_surface, x, y);
-
-            /* Increment usage counter */
-            ((guac_rdp_bitmap*) bitmap)->used++;
-
-    }
-
-    return TRUE;
-
-}
-
-BOOL guac_rdp_gdi_opaquerect(rdpContext* context, const OPAQUE_RECT_ORDER* opaque_rect) {
-
-    /* Get client data */
-    guac_client* client = ((rdp_freerdp_context*) context)->client;
-
-    UINT32 color = guac_rdp_convert_color(context, opaque_rect->color);
-
-    guac_common_surface* current_surface = ((guac_rdp_client*) client->data)->current_surface;
-
-    int x = opaque_rect->nLeftRect;
-    int y = opaque_rect->nTopRect;
-    int w = opaque_rect->nWidth;
-    int h = opaque_rect->nHeight;
-
-    guac_common_surface_set(current_surface, x, y, w, h,
-            (color >> 16) & 0xFF,
-            (color >> 8 ) & 0xFF,
-            (color      ) & 0xFF,
-            0xFF);
-
-    return TRUE;
-
-}
-
-BOOL guac_rdp_gdi_set_bounds(rdpContext* context, const rdpBounds* bounds) {
+void guac_rdp_gdi_mark_frame(rdpContext* context, int starting) {
 
     guac_client* client = ((rdp_freerdp_context*) context)->client;
     guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
 
-    /* If no bounds given, clear bounding rect */
-    if (bounds == NULL)
-        guac_common_surface_reset_clip(rdp_client->display->default_surface);
+    /* A new frame has been received from the RDP server and processed */
+    if (!starting)
+        guac_display_render_thread_notify_frame(rdp_client->render_thread);
 
-    /* Otherwise, set bounding rectangle */
-    else
-        guac_common_surface_clip(rdp_client->display->default_surface,
-                bounds->left, bounds->top,
-                bounds->right - bounds->left + 1,
-                bounds->bottom - bounds->top + 1);
+}
+
+BOOL guac_rdp_gdi_frame_marker(rdpContext* context, const FRAME_MARKER_ORDER* frame_marker) {
+    guac_rdp_gdi_mark_frame(context, frame_marker->action == FRAME_START);
+    return TRUE;
+}
+
+BOOL guac_rdp_gdi_surface_frame_marker(rdpContext* context, const SURFACE_FRAME_MARKER* surface_frame_marker) {
+
+    guac_rdp_gdi_mark_frame(context, surface_frame_marker->frameAction != SURFACECMD_FRAMEACTION_END);
+
+    int frame_acknowledge;
+#ifdef HAVE_SETTERS_GETTERS
+    frame_acknowledge = freerdp_settings_get_uint32(context->settings, FreeRDP_FrameAcknowledge);
+#else
+    frame_acknowledge = context->settings->FrameAcknowledge;
+#endif
+
+    if (frame_acknowledge > 0)
+        IFCALL(context->update->SurfaceFrameAcknowledge, context,
+                surface_frame_marker->frameId);
+
+    return TRUE;
+
+}
+
+BOOL guac_rdp_gdi_begin_paint(rdpContext* context) {
+
+    guac_client* client = ((rdp_freerdp_context*) context)->client;
+    guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
+    rdpGdi* gdi = context->gdi;
+
+    GUAC_ASSERT(rdp_client->current_context == NULL);
+
+    /* All potential drawing operations must occur while holding an open context */
+    guac_display_layer* default_layer = guac_display_default_layer(rdp_client->display);
+    guac_display_layer_raw_context* current_context = guac_display_layer_open_raw(default_layer);
+    rdp_client->current_context = current_context;
+
+    /* Resynchronize default layer buffer details with FreeRDP's GDI */
+    current_context->buffer = gdi->primary_buffer;
+    current_context->stride = gdi->stride;
+    guac_rect_init(&current_context->bounds, 0, 0, gdi->width, gdi->height);
 
     return TRUE;
 
 }
 
 BOOL guac_rdp_gdi_end_paint(rdpContext* context) {
-    /* IGNORE */
+
+    guac_client* client = ((rdp_freerdp_context*) context)->client;
+    guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
+    rdpGdi* gdi = context->gdi;
+
+    guac_display_layer* default_layer = guac_display_default_layer(rdp_client->display);
+    guac_display_layer_raw_context* current_context = rdp_client->current_context;
+
+    /* Handle the case where EndPaint was called without a preceding BeginPaint.
+     * This can occur during screen resize events in "display-update" mode with
+     * FreeRDP version 3.8.0 or later, where EndPaint is called to ensure the
+     * update-lock is released and data is flushed before resizing. See the
+     * associated FreeRDP PR: https://github.com/FreeRDP/FreeRDP/pull/10488 */
+    if (current_context == NULL)
+        return TRUE;
+
+    /* Ignore paint if GDI output is suppressed */
+    if (gdi->suppressOutput)
+        goto paint_complete;
+
+    /* Ignore paint if nothing has been done (empty rect) */
+    if (gdi->primary->hdc->hwnd->invalid->null)
+        goto paint_complete;
+
+    INT32 x = gdi->primary->hdc->hwnd->invalid->x;
+    INT32 y = gdi->primary->hdc->hwnd->invalid->y;
+    UINT32 w = gdi->primary->hdc->hwnd->invalid->w;
+    UINT32 h = gdi->primary->hdc->hwnd->invalid->h;
+
+    /* guac_rect uses signed arithmetic for all values. While FreeRDP
+     * definitely performs its own checks and ensures these values cannot get
+     * so large as to cause problems with signed arithmetic, it's worth
+     * checking and bailing out here if an external bug breaks that. */
+    GUAC_ASSERT(w <= INT_MAX && h <= INT_MAX);
+
+    /* Mark modified region as dirty, but only within the bounds of the
+     * rendering surface */
+    guac_rect dst_rect;
+    guac_rect_init(&dst_rect, x, y, w, h);
+    guac_rect_constrain(&dst_rect, &current_context->bounds);
+    guac_rect_extend(&current_context->dirty, &dst_rect);
+
+    rdp_client->gdi_modified = 1;
+
+paint_complete:
+
+    /* Clear GDI state for future draws */
+    gdi->primary->hdc->hwnd->invalid->null = TRUE;
+    gdi->primary->hdc->hwnd->ninvalid = 0;
+
+    /* There will be no further drawing operations */
+    rdp_client->current_context = NULL;
+    guac_display_layer_close_raw(default_layer, current_context);
+
     return TRUE;
+
 }
 
 BOOL guac_rdp_gdi_desktop_resize(rdpContext* context) {
 
     guac_client* client = ((rdp_freerdp_context*) context)->client;
     guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
+    rdpGdi* gdi = context->gdi;
 
-    guac_common_surface_resize(rdp_client->display->default_surface,
-            guac_rdp_get_width(context->instance),
-            guac_rdp_get_height(context->instance));
+    int width = guac_rdp_get_width(context->instance);
+    int height = guac_rdp_get_height(context->instance);
 
-    guac_common_surface_reset_clip(rdp_client->display->default_surface);
+    /* All potential drawing operations must occur while holding an open context */
+    guac_display_layer* default_layer = guac_display_default_layer(rdp_client->display);
 
+#if (FREERDP_VERSION_MAJOR < 3) || \
+    (FREERDP_VERSION_MAJOR == 3 && FREERDP_VERSION_MINOR < 8)
+    /* For FreeRDP versions prior to 3.8.0, EndPaint is not called within
+     * gdi_resize(), so the paint context opened by BeginPaint is normally
+     * already closed by the time a desktop resize arrives. In some server
+     * orderings the resize can arrive with a BeginPaint still open and no
+     * matching EndPaint — most easily triggered by a multi-monitor layout
+     * change that grows the desktop (e.g. adding a third monitor), which can
+     * deliver a resize mid-frame. Rather than aborting on the invariant
+     * (which tears down the entire RDP connection), close the stale paint
+     * context here so the resize proceeds cleanly. The in-progress partial
+     * frame is discarded; the server issues a full repaint after a desktop
+     * resize. A subsequent EndPaint, if any, no-ops because end_paint returns
+     * early when current_context is NULL. */
+    if (rdp_client->current_context != NULL) {
+        guac_client_log(client, GUAC_LOG_DEBUG, "Desktop resize arrived with "
+                "an open paint context; closing it before resizing.");
+        guac_display_layer_close_raw(default_layer, rdp_client->current_context);
+        rdp_client->current_context = NULL;
+    }
+#endif
+
+    guac_display_layer_raw_context* current_context = guac_display_layer_open_raw(default_layer);
+
+    /* Resize FreeRDP's GDI buffer */
+    BOOL retval = gdi_resize(context->gdi, width, height);
+    GUAC_ASSERT(gdi->primary_buffer != NULL);
+
+    /* Update our reference to the GDI buffer, as well as any structural
+     * details, which may now all be different */
+    current_context->buffer = gdi->primary_buffer;
+    current_context->stride = gdi->stride;
+    guac_rect_init(&current_context->bounds, 0, 0, gdi->width, gdi->height);
+
+    /* Resize layer to match new display dimensions and underlying buffer */
+    guac_display_layer_resize(default_layer, gdi->width, gdi->height);
     guac_client_log(client, GUAC_LOG_DEBUG, "Server resized display to %ix%i",
-            guac_rdp_get_width(context->instance),
-            guac_rdp_get_height(context->instance));
+            gdi->width, gdi->height);
 
-    return TRUE;
+    guac_display_layer_close_raw(default_layer, current_context);
+
+    /* Track the previous monitor count so we only reset the cursor when a
+     * *new* monitor appears — otherwise every desktop resize would flicker
+     * the cursor back to the default arrow. */
+    pthread_mutex_lock(&(rdp_client->message_lock));
+    int monitors_count = rdp_client->disp->monitors_count;
+    int prev_count = rdp_client->disp->reported_monitors_count;
+    int reset_cursor = (monitors_count > prev_count);
+    rdp_client->disp->reported_monitors_count = monitors_count;
+    pthread_mutex_unlock(&(rdp_client->message_lock));
+
+    /* Broadcast the current monitor layout to connected clients (builds the
+     * JSON + sends it, with its own locking). */
+    guac_rdp_disp_broadcast_monitor_layout(rdp_client->disp);
+
+    /* Set the default pointer cursor only when a new monitor has been
+     * added — otherwise we'd flicker over a custom cursor (resize / hand /
+     * I-beam) on every server-initiated desktop resize. */
+    if (reset_cursor)
+        guac_display_set_cursor(rdp_client->display, GUAC_DISPLAY_CURSOR_POINTER);
+
+    return retval;
 
 }
-
-
