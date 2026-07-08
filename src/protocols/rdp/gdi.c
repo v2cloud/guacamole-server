@@ -31,8 +31,10 @@
 #include <guacamole/client.h>
 #include <guacamole/display.h>
 #include <guacamole/protocol.h>
+#include <guacamole/protocol-constants.h>
 #include <winpr/wtypes.h>
 
+#include <pthread.h>
 #include <stddef.h>
 
 void guac_rdp_gdi_mark_frame(rdpContext* context, int starting) {
@@ -160,17 +162,31 @@ BOOL guac_rdp_gdi_desktop_resize(rdpContext* context) {
     int width = guac_rdp_get_width(context->instance);
     int height = guac_rdp_get_height(context->instance);
 
-#if (FREERDP_VERSION_MAJOR < 3) || \
-    (FREERDP_VERSION_MAJOR == 3 && FREERDP_VERSION_MINOR < 8)
-    /* For FreeRDP versions prior to 3.8.0, EndPaint will not be called in
-     * `gdi_resize()`, so the current context should be NULL. If it is not
-     * NULL, it means that the current context is still open, and therefore the
-     * GDI buffer has not been flushed yet. */
-    GUAC_ASSERT(rdp_client->current_context == NULL);
-#endif
-
     /* All potential drawing operations must occur while holding an open context */
     guac_display_layer* default_layer = guac_display_default_layer(rdp_client->display);
+
+#if (FREERDP_VERSION_MAJOR < 3) || \
+    (FREERDP_VERSION_MAJOR == 3 && FREERDP_VERSION_MINOR < 8)
+    /* For FreeRDP versions prior to 3.8.0, EndPaint is not called within
+     * gdi_resize(), so the paint context opened by BeginPaint is normally
+     * already closed by the time a desktop resize arrives. In some server
+     * orderings the resize can arrive with a BeginPaint still open and no
+     * matching EndPaint — most easily triggered by a multi-monitor layout
+     * change that grows the desktop (e.g. adding a third monitor), which can
+     * deliver a resize mid-frame. Rather than aborting on the invariant
+     * (which tears down the entire RDP connection), close the stale paint
+     * context here so the resize proceeds cleanly. The in-progress partial
+     * frame is discarded; the server issues a full repaint after a desktop
+     * resize. A subsequent EndPaint, if any, no-ops because end_paint returns
+     * early when current_context is NULL. */
+    if (rdp_client->current_context != NULL) {
+        guac_client_log(client, GUAC_LOG_DEBUG, "Desktop resize arrived with "
+                "an open paint context; closing it before resizing.");
+        guac_display_layer_close_raw(default_layer, rdp_client->current_context);
+        rdp_client->current_context = NULL;
+    }
+#endif
+
     guac_display_layer_raw_context* current_context = guac_display_layer_open_raw(default_layer);
 
     /* Resize FreeRDP's GDI buffer */
@@ -189,6 +205,26 @@ BOOL guac_rdp_gdi_desktop_resize(rdpContext* context) {
             gdi->width, gdi->height);
 
     guac_display_layer_close_raw(default_layer, current_context);
+
+    /* Track the previous monitor count so we only reset the cursor when a
+     * *new* monitor appears — otherwise every desktop resize would flicker
+     * the cursor back to the default arrow. */
+    pthread_mutex_lock(&(rdp_client->message_lock));
+    int monitors_count = rdp_client->disp->monitors_count;
+    int prev_count = rdp_client->disp->reported_monitors_count;
+    int reset_cursor = (monitors_count > prev_count);
+    rdp_client->disp->reported_monitors_count = monitors_count;
+    pthread_mutex_unlock(&(rdp_client->message_lock));
+
+    /* Broadcast the current monitor layout to connected clients (builds the
+     * JSON + sends it, with its own locking). */
+    guac_rdp_disp_broadcast_monitor_layout(rdp_client->disp);
+
+    /* Set the default pointer cursor only when a new monitor has been
+     * added — otherwise we'd flicker over a custom cursor (resize / hand /
+     * I-beam) on every server-initiated desktop resize. */
+    if (reset_cursor)
+        guac_display_set_cursor(rdp_client->display, GUAC_DISPLAY_CURSOR_POINTER);
 
     return retval;
 

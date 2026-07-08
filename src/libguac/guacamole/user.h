@@ -288,12 +288,16 @@ struct guac_user {
     /**
      * Handler for size events sent by the Guacamole web-client.
      *
-     * The handler takes an integer width and integer height, representing
-     * the current visible screen area of the client.
+     * The handler takes the requested width and height (the client's
+     * current visible screen area) along with the target monitor's
+     * position within a multi-monitor layout (x_position, top_offset,
+     * left_offset). See guac_user_size_handler for the full parameter
+     * contract.
      *
      * Example:
      * @code
-     *     int size_handler(guac_user* user, int width, int height);
+     *     int size_handler(guac_user* user, int width, int height,
+     *          int x_position, int top_offset, int left_offset);
      *
      *     int guac_user_init(guac_user* user, int argc, char** argv) {
      *         user->size_handler = size_handler;

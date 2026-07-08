@@ -561,6 +561,16 @@ static int guac_rdp_handle_connection(guac_client* client) {
     /* Create display */
     rdp_client->display = guac_display_alloc(client);
 
+    /* Decompose default-layer `copy` operations that cross monitor
+     * boundaries into fresh image transmissions. Connected clients clip
+     * each browser window's canvas per-monitor, so a `copy` opcode whose
+     * source and destination land on different monitor regions can't be
+     * rendered correctly from per-window pixel state. Re-encoding the
+     * destination region (already correct in the pending frame buffer)
+     * as a regular image avoids the issue server-side. */
+    guac_display_set_should_decompose_copy_handler(rdp_client->display,
+            guac_rdp_disp_should_decompose_copy, rdp_client);
+
     guac_display_layer* default_layer = guac_display_default_layer(rdp_client->display);
     guac_display_layer_resize(default_layer, rdp_client->settings->width, rdp_client->settings->height);
 

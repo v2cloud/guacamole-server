@@ -235,6 +235,12 @@ void guac_display_free(guac_display* display) {
 
 }
 
+void guac_display_set_should_decompose_copy_handler(guac_display* display,
+        guac_display_should_decompose_copy_handler* handler, void* closure) {
+    display->should_decompose_copy = handler;
+    display->should_decompose_copy_closure = closure;
+}
+
 void guac_display_dup(guac_display* display, guac_socket* socket) {
 
     guac_client* client = display->client;

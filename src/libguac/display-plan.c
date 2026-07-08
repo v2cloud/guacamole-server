@@ -387,12 +387,57 @@ void guac_display_plan_apply(guac_display_plan* plan) {
         guac_display_layer* display_layer = op->layer;
         switch (op->type) {
 
-            case GUAC_DISPLAY_PLAN_OPERATION_COPY:
+            case GUAC_DISPLAY_PLAN_OPERATION_COPY: {
+
+                int src_x = op->src.layer_rect.rect.left;
+                int src_y = op->src.layer_rect.rect.top;
+                int width  = guac_rect_width(&op->src.layer_rect.rect);
+                int height = guac_rect_height(&op->src.layer_rect.rect);
+
+                /* If a protocol module has installed a decomposition
+                 * callback (currently the RDP multi-monitor handler) and
+                 * decides this particular default-layer copy must not be
+                 * sent as a `copy` opcode, rewrite it as an IMG so the
+                 * worker threads will re-encode the destination region
+                 * from the pending frame buffer and transmit it as fresh
+                 * pixel data. The IMG fields (dirty_size, last_frame,
+                 * current_frame, layer) were populated when the operation
+                 * was originally constructed as an IMG in
+                 * guac_display_plan_create_visible_layer_ops; only `type`
+                 * and `dest` were rewritten by the plan-search copy
+                 * optimization, and we restore `dest` to a full rect
+                 * here.
+                 *
+                 * The src-layer restriction matches only screen-to-screen
+                 * copies originating from the default layer's last-frame
+                 * backing buffer — i.e. copies produced by plan-search's
+                 * hash-matching screen-copy optimization. Layer-to-layer
+                 * copies for the end-of-frame backup path
+                 * (guac_display_layer.layer → last_frame_buffer in
+                 * display-worker.c) are not multi-monitor-sensitive and
+                 * are intentionally left as `copy` opcodes regardless. */
+                if (display->should_decompose_copy != NULL
+                        && op->src.layer_rect.layer == display_layer->last_frame_buffer
+                        && display->should_decompose_copy(
+                                display->should_decompose_copy_closure,
+                                src_x, src_y, width, height,
+                                op->dest.left, op->dest.top)) {
+
+                    op->type = GUAC_DISPLAY_PLAN_OPERATION_IMG;
+                    guac_rect_init(&op->dest, op->dest.left, op->dest.top,
+                            width, height);
+                    guac_fifo_enqueue(&display->ops, op);
+                    break;
+
+                }
+
                 guac_protocol_send_copy(client->socket, op->src.layer_rect.layer,
-                        op->src.layer_rect.rect.left, op->src.layer_rect.rect.top,
-                        guac_rect_width(&op->src.layer_rect.rect), guac_rect_height(&op->src.layer_rect.rect),
-                        GUAC_COMP_OVER, display_layer->layer, op->dest.left, op->dest.top);
+                        src_x, src_y, width, height,
+                        GUAC_COMP_OVER, display_layer->layer,
+                        op->dest.left, op->dest.top);
                 break;
+
+            }
 
             case GUAC_DISPLAY_PLAN_OPERATION_RECT:
 

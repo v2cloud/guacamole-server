@@ -49,6 +49,7 @@
 #include "socket.h"
 
 #include <cairo/cairo.h>
+#include <stdbool.h>
 #include <unistd.h>
 
 /**
@@ -245,6 +246,84 @@ void guac_display_stop(guac_display* display);
  *     The guac_display to free.
  */
 void guac_display_free(guac_display* display);
+
+/**
+ * Callback that decides whether a particular default-layer copy operation
+ * (a Guacamole protocol `copy` opcode within the default layer) should be
+ * transmitted as a fresh encoded image instead of a screen-to-screen
+ * copy. This exists primarily so multi-monitor protocols (currently RDP)
+ * can detect when a source-to-destination blit crosses between monitor
+ * regions — a case the connected client cannot represent as a `copy`
+ * when each browser window's canvas is clipped per-monitor.
+ *
+ * Thread safety: the callback is invoked from the libguac display flush
+ * thread, which is distinct from any protocol-specific input thread. If
+ * the callback consults state that may be mutated concurrently (e.g.
+ * monitor topology in the RDP case), it is responsible for acquiring
+ * the appropriate protocol-side lock. Even with locking, the verdict
+ * returned by the callback reflects a single point-in-time snapshot:
+ * if the underlying state changes immediately after the callback
+ * releases its lock, the verdict may have been computed against state
+ * that is no longer current by the time the resulting plan operation
+ * is executed. The cost of such a stale verdict is bounded (at worst
+ * one extra image transmission or one missed decomposition per frame,
+ * self-healing on the next frame); implementations need not attempt to
+ * eliminate the window.
+ *
+ * @param closure
+ *     The opaque user pointer that was passed to
+ *     guac_display_set_should_decompose_copy_handler().
+ *
+ * @param src_x
+ *     The X coordinate of the source region's top-left corner, in pixels
+ *     within the default layer.
+ *
+ * @param src_y
+ *     The Y coordinate of the source region's top-left corner, in pixels
+ *     within the default layer.
+ *
+ * @param width
+ *     The width of the copied region, in pixels.
+ *
+ * @param height
+ *     The height of the copied region, in pixels.
+ *
+ * @param dst_x
+ *     The X coordinate of the destination region's top-left corner, in
+ *     pixels within the default layer.
+ *
+ * @param dst_y
+ *     The Y coordinate of the destination region's top-left corner, in
+ *     pixels within the default layer.
+ *
+ * @return
+ *     true if the copy should be decomposed (re-encoded as an image at
+ *     the destination), false to keep the copy as a Guacamole `copy`
+ *     opcode.
+ */
+typedef bool guac_display_should_decompose_copy_handler(void* closure,
+        int src_x, int src_y, int width, int height,
+        int dst_x, int dst_y);
+
+/**
+ * Installs a callback that decides whether a particular default-layer
+ * copy operation should be decomposed into a fresh image transmission.
+ * The callback is consulted for every default-layer `copy` operation
+ * before it is sent. If unset (the default), all copy operations are
+ * transmitted unchanged.
+ *
+ * @param display
+ *     The display whose copy emission should be wrapped.
+ *
+ * @param handler
+ *     The callback to consult, or NULL to clear any installed callback.
+ *
+ * @param closure
+ *     An opaque user pointer that will be passed to the callback on each
+ *     invocation. Not interpreted by libguac.
+ */
+void guac_display_set_should_decompose_copy_handler(guac_display* display,
+        guac_display_should_decompose_copy_handler* handler, void* closure);
 
 /**
  * Replicates the current remote display state across the given socket. When
