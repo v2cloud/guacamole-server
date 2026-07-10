@@ -30,11 +30,7 @@
  * Creates a minimal mock guac_client for testing.
  */
 static guac_client* create_mock_client(void) {
-    guac_client* client = guac_mem_zalloc(sizeof(guac_client));
-    if (client) {
-        client->log_level = GUAC_LOG_DEBUG;
-    }
-    return client;
+    return guac_mem_zalloc(sizeof(guac_client));
 }
 
 /**
@@ -289,7 +285,9 @@ void test_rdpecam_sink__push_max_frames(void) {
 }
 
 /**
- * Test which verifies that popping from an empty sink fails.
+ * Test which verifies that popping from an empty, stopped sink fails rather
+ * than blocking. NOTE: guac_rdpecam_pop() intentionally blocks while the sink
+ * is empty and running, so the sink must be stopped before popping here.
  */
 void test_rdpecam_sink__pop_empty(void) {
     guac_client* client = create_mock_client();
@@ -297,6 +295,8 @@ void test_rdpecam_sink__pop_empty(void) {
 
     guac_rdpecam_sink* sink = guac_rdpecam_create(client);
     CU_ASSERT_PTR_NOT_NULL_FATAL(sink);
+
+    guac_rdpecam_signal_stop(sink);
 
     uint8_t* out_buf = NULL;
     size_t out_len = 0;

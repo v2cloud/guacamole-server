@@ -36,6 +36,9 @@
 
 guac_rdpecam_sink* guac_rdpecam_create(guac_client* client) {
 
+    if (!client)
+        return NULL;
+
     guac_rdpecam_sink* sink = guac_mem_zalloc(sizeof(guac_rdpecam_sink));
 
     if (!sink) {

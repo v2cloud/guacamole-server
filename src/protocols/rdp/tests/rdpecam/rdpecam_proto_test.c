@@ -28,25 +28,6 @@
 #include <string.h>
 
 /**
- * Creates a minimal mock guac_client for testing.
- */
-static guac_client* create_mock_client(void) {
-    guac_client* client = guac_mem_zalloc(sizeof(guac_client));
-    if (client) {
-        client->log_level = GUAC_LOG_DEBUG;
-    }
-    return client;
-}
-
-/**
- * Frees a mock guac_client created by create_mock_client().
- */
-static void free_mock_client(guac_client* client) {
-    if (client)
-        guac_mem_free(client);
-}
-
-/**
  * Test which verifies that build_version_request creates a valid message.
  */
 void test_rdpecam_proto__build_version_request(void) {
@@ -56,9 +37,11 @@ void test_rdpecam_proto__build_version_request(void) {
     BOOL result = rdpecam_build_version_request(s);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
 
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_SELECT_VERSION_REQUEST);
@@ -84,9 +67,11 @@ void test_rdpecam_proto__build_version_response(void) {
     BOOL result = rdpecam_build_version_response(s);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
 
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_SELECT_VERSION_RESPONSE);
@@ -104,9 +89,11 @@ void test_rdpecam_proto__build_success_response(void) {
     BOOL result = rdpecam_build_success_response(s);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
 
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_SUCCESS_RESPONSE);
@@ -127,19 +114,23 @@ void test_rdpecam_proto__build_device_added(void) {
     BOOL result = rdpecam_build_device_added(s, device_name, channel_name);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_DEVICE_ADDED_NOTIFICATION);
 
     /* Verify device name (UTF-16LE) */
     size_t name_len = strlen(device_name);
     for (size_t i = 0; i < name_len; i++) {
-        uint16_t ch = Stream_Read_UINT16(s);
+        uint16_t ch;
+        Stream_Read_UINT16(s, ch);
         CU_ASSERT_EQUAL(ch, (uint16_t)(unsigned char)device_name[i]);
     }
-    uint16_t nul = Stream_Read_UINT16(s);
+    uint16_t nul;
+    Stream_Read_UINT16(s, nul);
     CU_ASSERT_EQUAL(nul, 0);
 
     /* Verify channel name (ASCII) */
@@ -181,9 +172,11 @@ void test_rdpecam_proto__build_device_removed(void) {
     BOOL result = rdpecam_build_device_removed(s, channel_name);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_DEVICE_REMOVED_NOTIFICATION);
 
@@ -225,17 +218,23 @@ void test_rdpecam_proto__build_stream_list(void) {
     BOOL result = rdpecam_build_stream_list(s, streams, 2);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_STREAM_LIST_RESPONSE);
 
     for (int i = 0; i < 2; i++) {
-        uint16_t frame_source = Stream_Read_UINT16(s);
-        uint8_t category = Stream_Read_UINT8(s);
-        uint8_t selected = Stream_Read_UINT8(s);
-        uint8_t can_be_shared = Stream_Read_UINT8(s);
+        uint16_t frame_source;
+        Stream_Read_UINT16(s, frame_source);
+        uint8_t category;
+        Stream_Read_UINT8(s, category);
+        uint8_t selected;
+        Stream_Read_UINT8(s, selected);
+        uint8_t can_be_shared;
+        Stream_Read_UINT8(s, can_be_shared);
 
         CU_ASSERT_EQUAL(frame_source, streams[i].FrameSourceType);
         CU_ASSERT_EQUAL(category, streams[i].Category);
@@ -279,21 +278,31 @@ void test_rdpecam_proto__build_media_type_list(void) {
     BOOL result = rdpecam_build_media_type_list(s, media_types, 2);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_MEDIA_TYPE_LIST_RESPONSE);
 
     for (int i = 0; i < 2; i++) {
-        uint8_t format = Stream_Read_UINT8(s);
-        uint32_t width = Stream_Read_UINT32(s);
-        uint32_t height = Stream_Read_UINT32(s);
-        uint32_t fps_num = Stream_Read_UINT32(s);
-        uint32_t fps_den = Stream_Read_UINT32(s);
-        uint32_t par_num = Stream_Read_UINT32(s);
-        uint32_t par_den = Stream_Read_UINT32(s);
-        uint8_t flags = Stream_Read_UINT8(s);
+        uint8_t format;
+        Stream_Read_UINT8(s, format);
+        uint32_t width;
+        Stream_Read_UINT32(s, width);
+        uint32_t height;
+        Stream_Read_UINT32(s, height);
+        uint32_t fps_num;
+        Stream_Read_UINT32(s, fps_num);
+        uint32_t fps_den;
+        Stream_Read_UINT32(s, fps_den);
+        uint32_t par_num;
+        Stream_Read_UINT32(s, par_num);
+        uint32_t par_den;
+        Stream_Read_UINT32(s, par_den);
+        uint8_t flags;
+        Stream_Read_UINT8(s, flags);
 
         CU_ASSERT_EQUAL(format, media_types[i].Format);
         CU_ASSERT_EQUAL(width, media_types[i].Width);
@@ -322,20 +331,30 @@ void test_rdpecam_proto__build_current_media_type(void) {
     BOOL result = rdpecam_build_current_media_type(s, &media_type);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_CURRENT_MEDIA_TYPE_RESPONSE);
 
-    uint8_t format = Stream_Read_UINT8(s);
-    uint32_t width = Stream_Read_UINT32(s);
-    uint32_t height = Stream_Read_UINT32(s);
-    uint32_t fps_num = Stream_Read_UINT32(s);
-    uint32_t fps_den = Stream_Read_UINT32(s);
-    uint32_t par_num = Stream_Read_UINT32(s);
-    uint32_t par_den = Stream_Read_UINT32(s);
-    uint8_t flags = Stream_Read_UINT8(s);
+    uint8_t format;
+    Stream_Read_UINT8(s, format);
+    uint32_t width;
+    Stream_Read_UINT32(s, width);
+    uint32_t height;
+    Stream_Read_UINT32(s, height);
+    uint32_t fps_num;
+    Stream_Read_UINT32(s, fps_num);
+    uint32_t fps_den;
+    Stream_Read_UINT32(s, fps_den);
+    uint32_t par_num;
+    Stream_Read_UINT32(s, par_num);
+    uint32_t par_den;
+    Stream_Read_UINT32(s, par_den);
+    uint8_t flags;
+    Stream_Read_UINT8(s, flags);
 
     CU_ASSERT_EQUAL(format, media_type.Format);
     CU_ASSERT_EQUAL(width, media_type.Width);
@@ -444,9 +463,7 @@ void test_rdpecam_proto__parse_sample_request(void) {
  * Test which verifies that parse_stop_streams succeeds.
  */
 void test_rdpecam_proto__parse_stop_streams(void) {
-    uint8_t payload[0] = {};
-
-    BOOL result = rdpecam_parse_stop_streams(payload, 0);
+    BOOL result = rdpecam_parse_stop_streams(NULL, 0);
     CU_ASSERT_TRUE(result);
 }
 
@@ -460,10 +477,13 @@ void test_rdpecam_proto__write_sample_response_header(void) {
     BOOL result = rdpecam_write_sample_response_header(s, 0, 1, 100, 1000000);
     CU_ASSERT_TRUE(result);
 
-    Stream_Seek(s, 0);
-    uint8_t version = Stream_Read_UINT8(s);
-    uint8_t msg_id = Stream_Read_UINT8(s);
-    uint8_t stream_id = Stream_Read_UINT8(s);
+    Stream_SetPosition(s, 0);
+    uint8_t version;
+    Stream_Read_UINT8(s, version);
+    uint8_t msg_id;
+    Stream_Read_UINT8(s, msg_id);
+    uint8_t stream_id;
+    Stream_Read_UINT8(s, stream_id);
 
     CU_ASSERT_EQUAL(version, RDPECAM_PROTO_VERSION);
     CU_ASSERT_EQUAL(msg_id, RDPECAM_MSG_SAMPLE_RESPONSE);

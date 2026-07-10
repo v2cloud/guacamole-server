@@ -179,7 +179,8 @@ typedef struct guac_rdpecam_sink {
  *     The guac_client instance handling the relevant RDP connection.
  *
  * @return
- *     A newly-allocated RDPECAM sink, or NULL if allocation fails.
+ *     A newly-allocated RDPECAM sink, or NULL if the given client is NULL or
+ *     allocation fails.
  */
 guac_rdpecam_sink* guac_rdpecam_create(guac_client* client);
 
