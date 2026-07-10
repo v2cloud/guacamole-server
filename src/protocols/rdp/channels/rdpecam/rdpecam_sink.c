@@ -24,6 +24,7 @@
 #include <guacamole/protocol.h>
 #include <guacamole/socket.h>
 #include <guacamole/stream.h>
+#include <guacamole/timestamp.h>
 #include <guacamole/user.h>
 
 #include <errno.h>
@@ -69,6 +70,9 @@ guac_rdpecam_sink* guac_rdpecam_create(guac_client* client) {
     sink->stream_index = 0;
     sink->has_active_sender = false;
     sink->active_sender_channel = NULL;
+    sink->awaiting_keyframe = false;
+    sink->keyframe_needed = false;
+    sink->last_keyframe_request = 0;
 
     guac_client_log(client, GUAC_LOG_DEBUG, "RDPECAM sink created");
 
@@ -142,12 +146,6 @@ bool guac_rdpecam_push(guac_rdpecam_sink* sink, const void* data, size_t len) {
         return false;
     }
 
-    /* Prevent unbounded growth when the consumer is back-pressured. */
-    if (sink->queue_size >= GUAC_RDPECAM_MAX_FRAMES) {
-        pthread_mutex_unlock(&sink->lock);
-        return false;
-    }
-
     if (len < sizeof(guac_rdpecam_frame_header)) {
         guac_client_log(sink->client, GUAC_LOG_WARNING, "RDPECAM frame too small: %zu bytes (expected at least %zu)", 
                        len, sizeof(guac_rdpecam_frame_header));
@@ -171,10 +169,56 @@ bool guac_rdpecam_push(guac_rdpecam_sink* sink, const void* data, size_t len) {
 
     size_t expected_total_len = sizeof(guac_rdpecam_frame_header) + header->payload_len;
     if (len != expected_total_len) {
-        guac_client_log(sink->client, GUAC_LOG_WARNING, "RDPECAM frame length mismatch: got %zu bytes, expected %zu (header: %zu + payload: %u)", 
+        guac_client_log(sink->client, GUAC_LOG_WARNING, "RDPECAM frame length mismatch: got %zu bytes, expected %zu (header: %zu + payload: %u)",
                        len, expected_total_len, sizeof(guac_rdpecam_frame_header), header->payload_len);
         pthread_mutex_unlock(&sink->lock);
         return false;
+    }
+
+    bool incoming_keyframe = (header->flags & 0x01) != 0;
+
+    /* A keyframe makes the stream decodable again: stop dropping frames
+     * and cancel any pending keyframe request. */
+    if (incoming_keyframe) {
+        sink->awaiting_keyframe = false;
+        sink->keyframe_needed = false;
+    }
+
+    /* Drop non-keyframes while a keyframe is awaited, as their reference
+     * frames were discarded. */
+    else if (sink->awaiting_keyframe) {
+        pthread_mutex_unlock(&sink->lock);
+        return false;
+    }
+
+    /* If the consumer has fallen behind, discard the backlog rather than
+     * delivering stale frames. Frames which depend on the discarded frames
+     * cannot be decoded, so unless the incoming frame is a keyframe, drop
+     * frames until one arrives and request one from the encoder (see
+     * guac_rdpecam_take_keyframe_request()). */
+    if (sink->queue_size >= GUAC_RDPECAM_MAX_FRAMES) {
+
+        int discarded = 0;
+        while (sink->queue_head != NULL) {
+            guac_rdpecam_frame* stale = sink->queue_head;
+            sink->queue_head = stale->next;
+            sink->queue_size--;
+            guac_mem_free(stale->data);
+            guac_mem_free(stale);
+            discarded++;
+        }
+        sink->queue_tail = NULL;
+
+        guac_client_log(sink->client, GUAC_LOG_DEBUG,
+                "RDPECAM queue full: discarded %d stale frame(s); requesting "
+                "keyframe to resume cleanly", discarded);
+
+        if (!incoming_keyframe) {
+            sink->keyframe_needed = true;
+            sink->awaiting_keyframe = true;
+            pthread_mutex_unlock(&sink->lock);
+            return false;
+        }
     }
 
     guac_rdpecam_frame* frame = guac_mem_zalloc(sizeof(guac_rdpecam_frame));
@@ -282,5 +326,28 @@ int guac_rdpecam_get_queue_size(guac_rdpecam_sink* sink) {
     pthread_mutex_unlock(&sink->lock);
 
     return size;
+
+}
+
+bool guac_rdpecam_take_keyframe_request(guac_rdpecam_sink* sink) {
+
+    if (!sink)
+        return false;
+
+    bool request = false;
+
+    pthread_mutex_lock(&sink->lock);
+    if (sink->keyframe_needed) {
+        guac_timestamp now = guac_timestamp_current();
+        if (now - sink->last_keyframe_request
+                >= GUAC_RDPECAM_KEYFRAME_REQUEST_MIN_INTERVAL_MS) {
+            sink->last_keyframe_request = now;
+            sink->keyframe_needed = false;
+            request = true;
+        }
+    }
+    pthread_mutex_unlock(&sink->lock);
+
+    return request;
 
 }

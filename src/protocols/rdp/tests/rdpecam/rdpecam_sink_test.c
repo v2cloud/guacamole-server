@@ -275,10 +275,92 @@ void test_rdpecam_sink__push_max_frames(void) {
 
     CU_ASSERT_EQUAL(guac_rdpecam_get_queue_size(sink), GUAC_RDPECAM_MAX_FRAMES);
 
-    /* Next push should fail */
+    /* An overflowing push discards the backlog, drops the incoming
+     * non-keyframe, and flags a keyframe request */
+    header.pts_ms = 9999;
+    memcpy(frame_data, &header, sizeof(header));
     bool result = guac_rdpecam_push(sink, frame_data, sizeof(frame_data));
     CU_ASSERT_FALSE(result);
+    CU_ASSERT_EQUAL(guac_rdpecam_get_queue_size(sink), 0);
+    CU_ASSERT_TRUE(guac_rdpecam_take_keyframe_request(sink));
+
+    /* The request is consumed and rate-limited: no immediate repeat */
+    CU_ASSERT_FALSE(guac_rdpecam_take_keyframe_request(sink));
+
+    /* Further non-keyframes are dropped while awaiting a keyframe */
+    header.pts_ms = 10000;
+    memcpy(frame_data, &header, sizeof(header));
+    CU_ASSERT_FALSE(guac_rdpecam_push(sink, frame_data, sizeof(frame_data)));
+    CU_ASSERT_EQUAL(guac_rdpecam_get_queue_size(sink), 0);
+
+    /* A keyframe resumes queueing */
+    create_frame_header(&header, sizeof(payload), 10001, true);
+    memcpy(frame_data, &header, sizeof(header));
+    memcpy(frame_data + sizeof(header), payload, sizeof(payload));
+    CU_ASSERT_TRUE(guac_rdpecam_push(sink, frame_data, sizeof(frame_data)));
+    CU_ASSERT_EQUAL(guac_rdpecam_get_queue_size(sink), 1);
+
+    uint8_t* out_buf = NULL;
+    size_t out_len = 0;
+    bool out_keyframe = false;
+    uint32_t out_pts_ms = 0;
+    bool popped = guac_rdpecam_pop(sink, &out_buf, &out_len, &out_keyframe, &out_pts_ms);
+    CU_ASSERT_TRUE(popped);
+    if (popped) {
+        CU_ASSERT_TRUE(out_keyframe);
+        CU_ASSERT_EQUAL(out_pts_ms, 10001);
+        guac_mem_free(out_buf);
+    }
+
+    guac_rdpecam_destroy(sink);
+    free_mock_client(client);
+}
+
+/**
+ * Test which verifies that an overflowing push whose incoming frame is itself
+ * a keyframe discards the backlog and queues the keyframe immediately,
+ * without requesting another keyframe.
+ */
+void test_rdpecam_sink__push_full_incoming_keyframe(void) {
+    guac_client* client = create_mock_client();
+    CU_ASSERT_PTR_NOT_NULL_FATAL(client);
+
+    guac_rdpecam_sink* sink = guac_rdpecam_create(client);
+    CU_ASSERT_PTR_NOT_NULL_FATAL(sink);
+
+    uint8_t payload[100] = {0};
+    guac_rdpecam_frame_header header;
+    uint8_t frame_data[sizeof(header) + sizeof(payload)];
+
+    for (int i = 0; i < GUAC_RDPECAM_MAX_FRAMES; i++) {
+        create_frame_header(&header, sizeof(payload), 1000 + i, false);
+        memcpy(frame_data, &header, sizeof(header));
+        memcpy(frame_data + sizeof(header), payload, sizeof(payload));
+        CU_ASSERT_TRUE(guac_rdpecam_push(sink, frame_data, sizeof(frame_data)));
+    }
     CU_ASSERT_EQUAL(guac_rdpecam_get_queue_size(sink), GUAC_RDPECAM_MAX_FRAMES);
+
+    /* Overflowing keyframe: backlog discarded, keyframe queued */
+    create_frame_header(&header, sizeof(payload), 9999, true);
+    memcpy(frame_data, &header, sizeof(header));
+    memcpy(frame_data + sizeof(header), payload, sizeof(payload));
+    CU_ASSERT_TRUE(guac_rdpecam_push(sink, frame_data, sizeof(frame_data)));
+    CU_ASSERT_EQUAL(guac_rdpecam_get_queue_size(sink), 1);
+
+    /* No keyframe request: the queued keyframe already restores decoding */
+    CU_ASSERT_FALSE(guac_rdpecam_take_keyframe_request(sink));
+
+    uint8_t* out_buf = NULL;
+    size_t out_len = 0;
+    bool out_keyframe = false;
+    uint32_t out_pts_ms = 0;
+    bool popped = guac_rdpecam_pop(sink, &out_buf, &out_len, &out_keyframe, &out_pts_ms);
+    CU_ASSERT_TRUE(popped);
+    if (popped) {
+        CU_ASSERT_TRUE(out_keyframe);
+        CU_ASSERT_EQUAL(out_pts_ms, 9999);
+        guac_mem_free(out_buf);
+    }
 
     guac_rdpecam_destroy(sink);
     free_mock_client(client);

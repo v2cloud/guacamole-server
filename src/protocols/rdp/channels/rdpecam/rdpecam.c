@@ -205,6 +205,17 @@ int guac_rdp_rdpecam_blob_handler(guac_user* user, guac_stream* stream,
         if (st->frame_received == st->frame_expected) {
             /* We have a full frame: push to sink (failures are tracked in periodic stats) */
             guac_rdpecam_push(rdp_client->rdpecam_sink, st->frame_buf, st->frame_expected);
+
+            /* If the sink discarded its backlog, request an immediate
+             * keyframe from the browser rather than waiting for the next
+             * periodic keyframe. */
+            if (guac_rdpecam_take_keyframe_request(rdp_client->rdpecam_sink)) {
+                guac_user_log(user, GUAC_LOG_DEBUG,
+                        "RDPECAM requesting immediate keyframe from browser");
+                guac_user_stream_argv(user, user->socket, "text/plain",
+                        "camera-keyframe", "");
+            }
+
             guac_mem_free(st->frame_buf);
             st->frame_buf = NULL;
             st->frame_expected = 0;
