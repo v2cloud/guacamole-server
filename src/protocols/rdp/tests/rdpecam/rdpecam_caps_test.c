@@ -44,23 +44,7 @@ static guac_client* create_mock_client_with_rdp(void) {
     }
 
     client->data = rdp_client;
-    client->log_level = GUAC_LOG_DEBUG;
-
-    if (guac_rwlock_init(&rdp_client->lock) != 0) {
-        guac_mem_free(rdp_client);
-        guac_mem_free(client);
-        return NULL;
-    }
-
-    rdp_client->rdpecam_device_caps = guac_mem_zalloc(
-            sizeof(guac_rdp_rdpecam_device_caps) * GUAC_RDP_RDPECAM_MAX_DEVICES);
-    if (!rdp_client->rdpecam_device_caps) {
-        guac_rwlock_destroy(&rdp_client->lock);
-        guac_mem_free(rdp_client);
-        guac_mem_free(client);
-        return NULL;
-    }
-
+    guac_rwlock_init(&rdp_client->lock);
     return client;
 }
 
@@ -83,9 +67,6 @@ static void free_mock_client_with_rdp(guac_client* client) {
         if (caps->device_name)
             guac_mem_free(caps->device_name);
     }
-
-    if (rdp_client->rdpecam_device_caps)
-        guac_mem_free(rdp_client->rdpecam_device_caps);
 
     guac_rwlock_destroy(&rdp_client->lock);
     guac_mem_free(rdp_client);

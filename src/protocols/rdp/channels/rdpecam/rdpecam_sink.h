@@ -21,19 +21,29 @@
 #define GUAC_RDP_CHANNELS_RDPECAM_SINK_H
 
 #include <guacamole/client.h>
+#include <guacamole/timestamp.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 /**
- * The maximum number of video frames to buffer in the RDPECAM sink.
+ * The maximum number of video frames buffered by the RDPECAM sink. The
+ * queue depth bounds the latency added by buffering. When the queue is
+ * full, the backlog is discarded and frames are dropped until the next
+ * keyframe (see guac_rdpecam_push()).
  */
-#define GUAC_RDPECAM_MAX_FRAMES 15
+#define GUAC_RDPECAM_MAX_FRAMES 5
 
 /**
  * The maximum size of a single video frame in bytes.
  */
 #define GUAC_RDPECAM_MAX_FRAME_SIZE (1024 * 1024) // 1MB
+
+/**
+ * Minimum interval, in milliseconds, between keyframe requests signaled to
+ * the browser (see guac_rdpecam_take_keyframe_request()).
+ */
+#define GUAC_RDPECAM_KEYFRAME_REQUEST_MIN_INTERVAL_MS 500
 
 /**
  * RDPECAM frame header structure (little-endian).
@@ -170,6 +180,27 @@ typedef struct guac_rdpecam_sink {
      */
     void* active_sender_channel;
 
+    /**
+     * Whether non-keyframes are currently being dropped following a queue
+     * overflow. Queueing resumes at the next keyframe, as frames which
+     * depend on discarded frames cannot be decoded. Protected by the sink
+     * lock.
+     */
+    bool awaiting_keyframe;
+
+    /**
+     * Whether an immediate keyframe should be requested from the browser
+     * (consumed via guac_rdpecam_take_keyframe_request()). Protected by the
+     * sink lock.
+     */
+    bool keyframe_needed;
+
+    /**
+     * The time the last keyframe request was signaled, for rate limiting.
+     * Protected by the sink lock.
+     */
+    guac_timestamp last_keyframe_request;
+
 } guac_rdpecam_sink;
 
 /**
@@ -179,7 +210,8 @@ typedef struct guac_rdpecam_sink {
  *     The guac_client instance handling the relevant RDP connection.
  *
  * @return
- *     A newly-allocated RDPECAM sink, or NULL if allocation fails.
+ *     A newly-allocated RDPECAM sink, or NULL if the given client is NULL or
+ *     allocation fails.
  */
 guac_rdpecam_sink* guac_rdpecam_create(guac_client* client);
 
@@ -202,8 +234,11 @@ void guac_rdpecam_signal_stop(guac_rdpecam_sink* sink);
 
 /**
  * Queues a fully-assembled RDPECAM frame within the sink. The frame data is
- * copied into an internal buffer, and the call fails if the sink is stopping,
- * the queue is full, or validation of the header/payload fails.
+ * copied into an internal buffer. The call fails if the sink is stopping or
+ * if validation of the header/payload fails. If the queue is full, the
+ * backlog is discarded, and frames are dropped until the next keyframe,
+ * with a keyframe request flagged for the browser (see
+ * guac_rdpecam_take_keyframe_request()).
  *
  * @param sink
  *     The sink receiving the frame.
@@ -245,6 +280,20 @@ bool guac_rdpecam_pop(guac_rdpecam_sink* sink, uint8_t** out_buf, size_t* out_le
                       bool* out_keyframe, uint32_t* out_pts_ms);
 
 int guac_rdpecam_get_queue_size(guac_rdpecam_sink* sink);
+
+/**
+ * Atomically consumes any pending request for an immediate keyframe from the
+ * browser-side encoder, rate-limited to one request per
+ * GUAC_RDPECAM_KEYFRAME_REQUEST_MIN_INTERVAL_MS.
+ *
+ * @param sink
+ *     The sink to check.
+ *
+ * @return
+ *     Non-zero if a keyframe request should be signaled to the browser now,
+ *     zero otherwise.
+ */
+bool guac_rdpecam_take_keyframe_request(guac_rdpecam_sink* sink);
  
 
 #endif
