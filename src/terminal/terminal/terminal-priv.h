@@ -27,6 +27,7 @@
 #include "scrollbar.h"
 #include "terminal.h"
 #include "typescript.h"
+#include "selection-point.h"
 
 #include <guacamole/flag.h>
 
@@ -366,40 +367,46 @@ struct guac_terminal {
     bool selection_committed;
 
     /**
-     * The row that the selection starts at.
+     * The starting point of a selection
+     */
+    guac_terminal_selection_point selection_start;
+
+    /**
+     * The normalized row that the selection starts at.
      */
     int selection_start_row;
 
     /**
-     * The column that the selection starts at.
+     * The normalized column that the selection starts at.
      */
     int selection_start_column;
 
     /**
-     * The width of the character at selection start.
+     * The ending point of a selection
      */
-    int selection_start_width;
+    guac_terminal_selection_point selection_end;
 
     /**
-     * The row that the selection ends at.
+     * The normalized row that the selection ends at.
      */
     int selection_end_row;
 
     /**
-     * The column that the selection ends at.
+     * The normalized column that the selection ends at.
      */
     int selection_end_column;
-
-    /**
-     * The width of the character at selection end.
-     */
-    int selection_end_width;
 
     /**
      * Whether the cursor (arrow) keys should send cursor sequences
      * or application sequences (DECCKM).
      */
     bool application_cursor_keys;
+
+    /**
+     * Whether the keypad numeric keys should send numeric characters (DECKPNM)
+     * or application/alternate sequences (DECKPAM).
+     */
+    bool application_keypad_keys;
 
     /**
      * Whether a CR should automatically follow a LF, VT, or FF.
@@ -472,6 +479,12 @@ struct guac_terminal {
      * ASCII character to send when backspace is pressed.
      */
     char backspace;
+
+    /**
+     * The family of codes (e.g. vt100) which will be used when you push
+     * the function and keypad keys.
+     */
+    guac_terminal_func_keys_and_keypad func_keys_and_keypad;
 
     /**
      * Whether copying from the terminal clipboard should be blocked. If set,

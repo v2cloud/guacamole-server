@@ -246,12 +246,14 @@ void* guac_kubernetes_client_thread(void* data) {
             settings->width, settings->height, settings->resolution);
 
     /* Set optional parameters */
+    options->clipboard_buffer_size = settings->clipboard_buffer_size;
     options->disable_copy = settings->disable_copy;
     options->max_scrollback = settings->max_scrollback;
     options->font_name = settings->font_name;
     options->font_size = settings->font_size;
     options->color_scheme = settings->color_scheme;
     options->backspace = settings->backspace;
+    options->func_keys_and_keypad = settings->func_keys_and_keypad;
 
     /* Create terminal */
     kubernetes_client->term = guac_terminal_create(client, options);

@@ -47,6 +47,7 @@ AC_CHECK_HEADERS([fcntl.h stdlib.h string.h sys/socket.h time.h sys/time.h syslo
 AC_DEFINE([_GNU_SOURCE],   [1], [Uses GNU-specific APIs (if available)])
 AC_DEFINE([_XOPEN_SOURCE], [700], [Uses X/Open and POSIX APIs])
 AC_DEFINE([__BSD_VISIBLE], [1], [Uses BSD-specific APIs (if available)])
+AC_DEFINE([_GNU_SOURCE], [1], [Use GNU sources (if available)])
 
 # Check for availability of non-portable sched_getaffinity() function (one of
 # several possible routes for determining the number of available processors)
@@ -76,6 +77,9 @@ AC_CHECK_LIB([pthread], [pthread_create], [PTHREAD_LIBS=-lpthread
               AC_DEFINE([HAVE_LIBPTHREAD],,
                         [Whether libpthread was found])])
 
+# Check for pthread_setattr_default_np
+AC_CHECK_DECLS([pthread_setattr_default_np], , , [[#include <pthread.h>]])
+            
 # librt
 AC_CHECK_FUNC([timer_create], [AC_MSG_RESULT([timer_create was found without librt.])],
               [AC_CHECK_LIB([rt], [timer_create],
@@ -150,7 +154,7 @@ AC_SUBST(UUID_LIBS)
 AC_SUBST(CUNIT_LIBS)
 
 # Library functions
-AC_CHECK_FUNCS([clock_gettime gettimeofday memmove memset select strdup nanosleep])
+AC_CHECK_FUNCS([clock_gettime gettimeofday memmove memset select strdup nanosleep prctl])
 
 AC_CHECK_DECL([png_get_io_ptr],
     [AC_DEFINE([HAVE_PNG_GET_IO_PTR],,
@@ -229,6 +233,14 @@ AC_ARG_WITH(systemd_dir,
             ],systemd_dir=$withval)
 AM_CONDITIONAL([ENABLE_SYSTEMD], [test "x${systemd_dir}" != "x"])
 AC_SUBST(systemd_dir)
+
+# Systemd user
+AC_ARG_WITH(systemd_user,
+            [AS_HELP_STRING([--with-systemd-user=<username>],
+                            [the user configured in the systemd unit to run guacd @<:@default=daemon@:>@])],
+            [systemd_user=$withval],
+            [systemd_user=daemon])
+AC_SUBST(systemd_user)
 
 # guacd config file
 AC_ARG_WITH(guacd_conf,
@@ -688,7 +700,7 @@ then
 fi
 
 #
-# libVNCserver support for the requestedResize member, which enables the 
+# libVNCserver support for the requestedResize member, which enables the
 # client to pause frame buffer updates during a resize operation. If support
 # for this is missing, Guacamole may still attempt to send the resize requests
 # to the remote display, but there may be odd display behavior just before,
@@ -777,6 +789,29 @@ then
                   [#include <freerdp/codec/color.h>])
 
 fi
+
+# Check for WinPR HashTable_Insert (may be missing on older FreeRDP/WinPR 2.x)
+if test "x${have_freerdp}" = "xyes"
+then
+    AC_MSG_CHECKING([for HashTable_Insert in WinPR])
+    SAVE_LIBS="$LIBS"
+    LIBS="$RDP_LIBS $LIBS"
+    AC_LINK_IFELSE([AC_LANG_SOURCE([[ 
+        #include <winpr/collections.h>
+        int main(void) {
+            wHashTable* t = HashTable_New(FALSE);
+            const char* k = "k"; const char* v = "v";
+            (void)HashTable_Insert(t, k, v);
+            return 0;
+        }
+    ]])],
+    [AC_MSG_RESULT([yes])
+     AC_DEFINE([HAVE_WINPR_HASHTABLE_INSERT], 1, [WinPR provides HashTable_Insert])],
+    [AC_MSG_RESULT([no])])
+    LIBS="$SAVE_LIBS"
+fi
+
+/* Removed unused WinPR HashTable checks; only HashTable_Insert is required */
 
 # It is difficult or impossible to test for variations in FreeRDP behavior in
 # between releases, as the change in behavior may not (yet) be associated with
@@ -1435,6 +1470,7 @@ AC_CONFIG_FILES([Makefile
                  src/common-ssh/Makefile
                  src/common-ssh/tests/Makefile
                  src/terminal/Makefile
+                 src/terminal/tests/Makefile
                  src/libguac/Makefile
                  src/libguac/tests/Makefile
                  src/guacd/Makefile
@@ -1483,6 +1519,7 @@ AM_COND_IF([ENABLE_INIT], [build_init="${init_dir}"], [build_init=no])
 #
 
 AM_COND_IF([ENABLE_SYSTEMD], [build_systemd="${systemd_dir}"], [build_systemd=no])
+AM_COND_IF([ENABLE_SYSTEMD], [build_systemd_user="${systemd_user}"], [build_systemd_user=no])
 
 #
 # FreeRDP plugins
@@ -1534,6 +1571,7 @@ $PACKAGE_NAME version $PACKAGE_VERSION
    FreeRDP plugins: ${build_rdp_plugins}
    Init scripts: ${build_init}
    Systemd units: ${build_systemd}
+   Systemd user: ${build_systemd_user}
 
 Type \"make\" to compile $PACKAGE_NAME.
 "

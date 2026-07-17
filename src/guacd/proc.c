@@ -150,7 +150,7 @@ static void guacd_proc_add_user(guacd_proc* proc, int fd, int owner) {
  * a process which does not have a PGID separate from the main guacd process
  * can result in guacd itself being terminated.
  */
-static void guacd_kill_current_proc_group() {
+static void guacd_kill_current_proc_group(void) {
 
     /* Forcibly kill all children within process group */
     if (kill(0, SIGKILL))
@@ -325,8 +325,8 @@ static void signal_stop_handler(int signal) {
 static void guacd_exec_proc(guacd_proc* proc, const char* protocol) {
 
     int result = 1;
-   
-    /* Set process group ID to match PID */ 
+
+    /* Set process group ID to match PID */
     if (setpgid(0, 0)) {
         guacd_log(GUAC_LOG_ERROR, "Cannot set PGID for connection process: %s",
                 strerror(errno));
@@ -371,7 +371,7 @@ static void guacd_exec_proc(guacd_proc* proc, const char* protocol) {
         owner = 0;
 
     }
-    
+
 cleanup_client:
 
     /* Request client to stop/disconnect */
@@ -496,8 +496,8 @@ guacd_proc* guacd_create_proc(const char* protocol) {
  */
 static void guacd_proc_kill(guacd_proc* proc) {
 
-    /* Request orderly termination of process */
-    if (kill(proc->pid, SIGTERM))
+    /* Request orderly termination of process group */
+    if (kill(-proc->pid, SIGTERM))
         guacd_log(GUAC_LOG_DEBUG, "Unable to request termination of "
                 "client process: %s ", strerror(errno));
 

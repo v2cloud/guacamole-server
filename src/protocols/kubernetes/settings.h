@@ -161,6 +161,11 @@ typedef struct guac_kubernetes_settings {
     int resolution;
 
     /**
+     * The maximum number of bytes to allow within the clipboard.
+     */
+    int clipboard_buffer_size;
+
+    /**
      * Whether outbound clipboard access should be blocked. If set, it will not
      * be possible to copy data from the terminal to the client using the
      * clipboard.
@@ -252,6 +257,12 @@ typedef struct guac_kubernetes_settings {
      * not specified in the client settings.
      */
     int backspace;
+
+    /**
+     * The family of codes (e.g. vt100) which will be used when you push
+     * the function and keypad keys.
+     */
+    char* func_keys_and_keypad;
 
 } guac_kubernetes_settings;
 

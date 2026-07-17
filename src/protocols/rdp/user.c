@@ -67,6 +67,10 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
         /* Store owner's settings at client level */
         rdp_client->settings = settings;
 
+        /* Init clipboard */
+        rdp_client->clipboard =
+            guac_rdp_clipboard_alloc(user->client, settings->clipboard_buffer_size);
+
         /* Start client thread */
         if (pthread_create(&rdp_client->client_thread, NULL,
                     guac_rdp_client_thread, user->client)) {
@@ -78,6 +82,10 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
         /* Handle inbound audio streams if audio input is enabled */
         if (settings->enable_audio_input)
             user->audio_handler = guac_rdp_audio_handler;
+
+        /* Handle inbound camera streams if RDPECAM is enabled */
+        if (settings->enable_rdpecam)
+            user->video_handler = guac_rdp_rdpecam_video_handler;
 
     }
 

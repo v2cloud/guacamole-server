@@ -37,12 +37,16 @@
 #include <libgen.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <netinet/tcp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#ifdef HAVE_PRCTL
+#include <sys/prctl.h>
+#endif
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -98,7 +102,7 @@ static int redirect_fd(int fd, int flags) {
  *    still the original caller. This function does not return for the original
  *    caller if daemonization succeeds.
  */
-static int daemonize() {
+static int daemonize(void) {
 
     pid_t pid;
 
@@ -133,7 +137,7 @@ static int daemonize() {
 
     /* Change to root directory */
     if (chdir(GUACD_ROOT) < 0) {
-        guacd_log(GUAC_LOG_ERROR, 
+        guacd_log(GUAC_LOG_ERROR,
                 "Unable to change working directory to "
                 GUACD_ROOT);
         return 1;
@@ -145,7 +149,7 @@ static int daemonize() {
     || redirect_fd(STDOUT_FILENO, O_WRONLY)
     || redirect_fd(STDERR_FILENO, O_WRONLY)) {
 
-        guacd_log(GUAC_LOG_ERROR, 
+        guacd_log(GUAC_LOG_ERROR,
                 "Unable to redirect standard file descriptors to "
                 GUACD_DEV_NULL);
         return 1;
@@ -199,7 +203,7 @@ static void guacd_openssl_locking_callback(int mode, int n,
  * @return
  *     An ID which uniquely identifies the current thread.
  */
-static unsigned long guacd_openssl_id_callback() {
+static unsigned long guacd_openssl_id_callback(void) {
     return (unsigned long) pthread_self();
 }
 
@@ -320,6 +324,14 @@ int main(int argc, char* argv[]) {
 
     /* General */
     int retval;
+
+#ifdef HAVE_DECL_PTHREAD_SETATTR_DEFAULT_NP
+    /* Set default stack size */
+    pthread_attr_t default_pthread_attr;
+    pthread_attr_init(&default_pthread_attr);
+    pthread_attr_setstacksize(&default_pthread_attr, GUACD_THREAD_STACK_SIZE);
+    pthread_setattr_default_np(&default_pthread_attr);
+#endif // HAVE_DECL_PTHREAD_SETATTR_DEFAULT_NP
 
     /* Load configuration */
     guacd_config* config = guacd_conf_load();
@@ -482,7 +494,7 @@ int main(int argc, char* argv[]) {
             fprintf(pidf, "%d\n", getpid());
             fclose(pidf);
         }
-        
+
         /* Fail if could not write PID file*/
         else {
             guacd_log(GUAC_LOG_ERROR, "Could not write PID file: %s", strerror(errno));
@@ -507,6 +519,14 @@ int main(int argc, char* argv[]) {
     struct sigaction signal_stop_action = { .sa_handler = signal_stop_handler };
     sigaction(SIGINT, &signal_stop_action, NULL);
     sigaction(SIGTERM, &signal_stop_action, NULL);
+
+#ifdef HAVE_PRCTL
+    /* Adopt any orphan processes from clients so we can properly terminate and reap */
+    prctl(PR_SET_CHILD_SUBREAPER, 1);
+#else
+    guacd_log(GUAC_LOG_INFO, "prctl not available on this platform. "
+            "Orphan child processes may pile up in the process table.");
+#endif
 
     /* Log listening status */
     guacd_log(GUAC_LOG_INFO, "Listening on host %s, port %s", bound_address, bound_port);

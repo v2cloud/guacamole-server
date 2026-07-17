@@ -56,6 +56,8 @@ const char* GUAC_KUBERNETES_CLIENT_ARGS[] = {
     "read-only",
     "backspace",
     "scrollback",
+    "func-keys-and-keypad",
+    "clipboard-buffer-size",
     "disable-copy",
     "disable-paste",
     NULL
@@ -237,9 +239,20 @@ enum KUBERNETES_ARGS_IDX {
     IDX_BACKSPACE,
 
     /**
+     * The family of codes (e.g. vt100) which will be used when you push
+     * the function and keypad keys.
+     */
+    IDX_FUNC_KEYS_AND_KEYPAD,
+
+    /**
      * The maximum size of the scrollback buffer in rows.
      */
     IDX_SCROLLBACK,
+
+    /**
+     * The maximum number of bytes to allow within the clipboard.
+     */
+    IDX_CLIPBOARD_BUFFER_SIZE,
 
     /**
      * Whether outbound clipboard access should be blocked. If set to "true",
@@ -417,6 +430,32 @@ guac_kubernetes_settings* guac_kubernetes_parse_args(guac_user* user,
     settings->backspace =
         guac_user_parse_args_int(user, GUAC_KUBERNETES_CLIENT_ARGS, argv,
                 IDX_BACKSPACE, GUAC_TERMINAL_DEFAULT_BACKSPACE);
+
+    /* Copy the family of codes for function keys and keypad */
+    settings->func_keys_and_keypad =
+        guac_user_parse_args_string(user, GUAC_KUBERNETES_CLIENT_ARGS, argv,
+                IDX_FUNC_KEYS_AND_KEYPAD, "");
+
+    /* Set the maximum number of bytes to allow within the clipboard. */
+    settings->clipboard_buffer_size =
+        guac_user_parse_args_int(user, GUAC_KUBERNETES_CLIENT_ARGS, argv,
+                IDX_CLIPBOARD_BUFFER_SIZE, 0);
+
+    /* Use default clipboard buffer size if given one is invalid. */
+    if (settings->clipboard_buffer_size < GUAC_COMMON_CLIPBOARD_MIN_LENGTH) {
+        settings->clipboard_buffer_size = GUAC_COMMON_CLIPBOARD_MIN_LENGTH;
+        guac_user_log(user, GUAC_LOG_INFO, "Unspecified or invalid clipboard buffer "
+                "size: \"%s\". Using the default minimum size: %i.",
+                argv[IDX_CLIPBOARD_BUFFER_SIZE],
+                settings->clipboard_buffer_size);
+    }
+    else if (settings->clipboard_buffer_size > GUAC_COMMON_CLIPBOARD_MAX_LENGTH) {
+        settings->clipboard_buffer_size = GUAC_COMMON_CLIPBOARD_MAX_LENGTH;
+        guac_user_log(user, GUAC_LOG_WARNING, "Invalid clipboard buffer "
+                "size: \"%s\". Using the default maximum size: %i.",
+                argv[IDX_CLIPBOARD_BUFFER_SIZE],
+                settings->clipboard_buffer_size);
+    }
 
     /* Parse clipboard copy disable flag */
     settings->disable_copy =

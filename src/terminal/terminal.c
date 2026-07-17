@@ -143,6 +143,7 @@ void guac_terminal_reset(guac_terminal* term) {
     term->text_selected = false;
     term->selection_committed = false;
     term->application_cursor_keys = false;
+    term->application_keypad_keys = false;
     term->automatic_carriage_return = false;
     term->insert_mode = false;
 
@@ -242,6 +243,7 @@ guac_terminal_options* guac_terminal_options_create(
     options->dpi = dpi;
 
     /* Set default values for all other parameters */
+    options->clipboard_buffer_size = GUAC_COMMON_CLIPBOARD_MIN_LENGTH;
     options->disable_copy = GUAC_TERMINAL_DEFAULT_DISABLE_COPY;
     options->max_scrollback = GUAC_TERMINAL_DEFAULT_MAX_SCROLLBACK;
     options->font_name = GUAC_TERMINAL_DEFAULT_FONT_NAME;
@@ -419,7 +421,7 @@ guac_terminal* guac_terminal_create(guac_client* client,
     /* Init terminal state */
     term->current_attributes = default_char.attributes;
     term->default_char = default_char;
-    term->clipboard = guac_common_clipboard_alloc();
+    term->clipboard = guac_common_clipboard_alloc(options->clipboard_buffer_size);
     term->disable_copy = options->disable_copy;
 
     /* Calculate available text display area by character size */
@@ -502,6 +504,16 @@ guac_terminal* guac_terminal_create(guac_client* client,
 
     /* Configure backspace */
     term->backspace = options->backspace;
+
+    /* Configure the family of codes for function keys and the keypad */
+    if (options->func_keys_and_keypad == NULL ||
+            options->func_keys_and_keypad[0] == 0 ||
+            strcmp(options->func_keys_and_keypad, "esc") == 0) {
+        term->func_keys_and_keypad = GUAC_TERMINAL_FUNC_KEYS_AND_KEYPAD_ESC;
+    }
+    else if (strcmp(options->func_keys_and_keypad, "vt100") == 0) {
+        term->func_keys_and_keypad = GUAC_TERMINAL_FUNC_KEYS_AND_KEYPAD_VT100;
+    }
 
     /* Initialize mouse latest click time and counter */
     term->click_timer = 0;
@@ -1431,13 +1443,13 @@ static int __guac_terminal_send_key(guac_terminal* term, int keysym, int pressed
     }
 
     /* Track modifiers */
-    if (keysym == 0xFFE3 || keysym == 0xFFE4)
+    if (keysym == GUAC_TERMINAL_KEY_CTRL_L || keysym == GUAC_TERMINAL_KEY_CTRL_R)
         term->mod_ctrl = pressed;
-    else if (keysym == 0xFFE7 || keysym == 0xFFE8)
+    else if (keysym == GUAC_TERMINAL_KEY_META_L || keysym == GUAC_TERMINAL_KEY_META_R)
         term->mod_meta = pressed;
-    else if (keysym == 0xFFE9 || keysym == 0xFFEA)
+    else if (keysym == GUAC_TERMINAL_KEY_ALT_L || keysym == GUAC_TERMINAL_KEY_ALT_R)
         term->mod_alt = pressed;
-    else if (keysym == 0xFFE1 || keysym == 0xFFE2)
+    else if (keysym == GUAC_TERMINAL_KEY_SHIFT_L || keysym == GUAC_TERMINAL_KEY_SHIFT_R)
         term->mod_shift = pressed;
         
     /* If key pressed */
@@ -1456,18 +1468,42 @@ static int __guac_terminal_send_key(guac_terminal* term, int keysym, int pressed
         if ((keysym == 'C' && term->mod_ctrl) || (keysym == 'c' && term->mod_meta))
             return 0;
 
-        /* Shift+PgUp / Shift+PgDown shortcuts for scrolling */
+        /* Shortcuts for scrolling history with shift */
         if (term->mod_shift) {
 
+            /* Home */
+            if (keysym == GUAC_TERMINAL_KEY_HOME || keysym == GUAC_TERMINAL_KEY_KP_HOME) {
+                guac_terminal_scroll_display_up(term, term->max_scrollback);
+                return 0;
+            }
+
+            /* End */
+            if (keysym == GUAC_TERMINAL_KEY_END || keysym == GUAC_TERMINAL_KEY_KP_END) {
+                guac_terminal_scroll_display_down(term, term->max_scrollback);
+                return 0;
+            }
+
             /* Page up */
-            if (keysym == 0xFF55) {
+            if (keysym == GUAC_TERMINAL_KEY_PAGEUP || keysym == GUAC_TERMINAL_KEY_KP_PAGEUP) {
                 guac_terminal_scroll_display_up(term, term->term_height);
                 return 0;
             }
 
             /* Page down */
-            if (keysym == 0xFF56) {
+            if (keysym == GUAC_TERMINAL_KEY_PAGEDOWN || keysym == GUAC_TERMINAL_KEY_KP_PAGEDOWN) {
                 guac_terminal_scroll_display_down(term, term->term_height);
+                return 0;
+            }
+
+            /* Up */
+            if (keysym == GUAC_TERMINAL_KEY_UP || keysym == GUAC_TERMINAL_KEY_KP_UP) {
+                guac_terminal_scroll_display_up(term, 1);
+                return 0;
+            }
+
+            /* Down */
+            if (keysym == GUAC_TERMINAL_KEY_DOWN || keysym == GUAC_TERMINAL_KEY_KP_DOWN) {
+                guac_terminal_scroll_display_down(term, 1);
                 return 0;
             }
 
@@ -1479,7 +1515,7 @@ static int __guac_terminal_send_key(guac_terminal* term, int keysym, int pressed
 
         /* If alt being held, also send escape character */
         if (term->mod_alt)
-            guac_terminal_send_string(term, "\x1B");
+            guac_terminal_send_string(term, GUAC_TERMINAL_ASCII_ESCAPE);
 
         /* Translate Ctrl+letter to control code */ 
         if (term->mod_ctrl) {
@@ -1506,6 +1542,22 @@ static int __guac_terminal_send_key(guac_terminal* term, int keysym, int pressed
             else if (keysym >= '3' && keysym <= '7')
                 data = (char) (keysym - '3' + 0x1B);
 
+            /* CTRL+Left: return to previous word  */
+            else if (keysym == GUAC_TERMINAL_KEY_LEFT || keysym == GUAC_TERMINAL_KEY_KP_LEFT)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_PREV_WORD);
+
+            /* CTRL+Right: go to next word */
+            else if (keysym == GUAC_TERMINAL_KEY_RIGHT || keysym == GUAC_TERMINAL_KEY_KP_RIGHT)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_NEXT_WORD);
+
+            /* CTRL+Backspace: remove word (map to CTRL+w) */
+            else if (keysym == GUAC_TERMINAL_KEY_BACKSPACE)
+                data = (char) 23;
+
+            /* CTRL+Supr: remove word to right */
+            else if (keysym == GUAC_TERMINAL_KEY_DELETE || keysym == GUAC_TERMINAL_KEY_KP_DELETE)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_DELETE_WORD);
+
             /* Otherwise ignore */
             else
                 return 0;
@@ -1528,58 +1580,190 @@ static int __guac_terminal_send_key(guac_terminal* term, int keysym, int pressed
         /* Typeable keys of number pad */
         else if (keysym >= 0xFFAA && keysym <= 0xFFB9) {
             char value = keysym - 0xFF80;
-            guac_terminal_send_data(term, &value, sizeof(value));
+            if (term->func_keys_and_keypad == GUAC_TERMINAL_FUNC_KEYS_AND_KEYPAD_VT100 &&
+                    term->application_keypad_keys) {
+                /* https://vt100.net/docs/vt100-ug/chapter3.html */
+                if (value >= '0' && value <= '9') {
+                    char data[4];
+                    data[0] = '\x1B';
+                    data[1] = 'O';
+                    data[2] = 'p' + value - '0';
+                    data[3] = 0;
+                    /* We send sequences from \x1BOp to \x1BOy here */
+                    return guac_terminal_send_string(term, data);
+                }
+                else {
+                    switch (value) {
+                        case '-':
+                            return guac_terminal_send_string(term, "\x1BOm");
+                        case '.':
+                            return guac_terminal_send_string(term, "\x1BOn");
+                        /*
+                        * There is no comma on the regular keypad, so we use '*' to send
+                        * the appropriate code.
+                        */
+                        case '*':
+                            return guac_terminal_send_string(term, "\x1BOl");
+                        /*
+                        * At least in some environments JS does not differentiate regular
+                        * and keypad ENTER and its location property is always 0. So we
+                        * use '+' to send the appropriate ENTER escape code.
+                        */
+                        case '+':
+                            return guac_terminal_send_string(term, "\x1BOM");
+                        /* Just a typeable key */
+                        default:
+                            guac_terminal_send_data(term, &value, sizeof(value));
+                            break;
+                    }
+                }
+            }
+            else {
+                guac_terminal_send_data(term, &value, sizeof(value));
+            }
         }
 
         /* Non-printable keys */
         else {
 
             /* Backspace can vary based on configuration of terminal by client. */
-            if (keysym == 0xFF08) {
+            if (keysym == GUAC_TERMINAL_KEY_BACKSPACE) {
                 char backspace_str[] = { term->backspace, '\0' };
                 return guac_terminal_send_string(term, backspace_str);
             }
-            if (keysym == 0xFF09 || keysym == 0xFF89) return guac_terminal_send_string(term, "\x09"); /* Tab */
-            if (keysym == 0xFF0D || keysym == 0xFF8D) return guac_terminal_send_string(term, "\x0D"); /* Enter */
-            if (keysym == 0xFF1B) return guac_terminal_send_string(term, "\x1B"); /* Esc */
 
-            if (keysym == 0xFF50 || keysym == 0xFF95) return guac_terminal_send_string(term, "\x1B[1~"); /* Home */
+            /* Tab */
+            if (keysym == GUAC_TERMINAL_KEY_TAB || keysym == GUAC_TERMINAL_KEY_KP_TAB)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ASCII_TAB);
+
+            /* Enter */
+            if (keysym == GUAC_TERMINAL_KEY_ENTER || keysym == GUAC_TERMINAL_KEY_KP_ENTER)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ASCII_CR);
+
+            /* Esc */
+            if (keysym == GUAC_TERMINAL_KEY_ESCAPE)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ASCII_ESCAPE); 
+
+            /* Home */
+            if (keysym == GUAC_TERMINAL_KEY_HOME || keysym == GUAC_TERMINAL_KEY_KP_HOME)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_HOME);
 
             /* Arrow keys w/ application cursor */
             if (term->application_cursor_keys) {
-                if (keysym == 0xFF51 || keysym == 0xFF96) return guac_terminal_send_string(term, "\x1BOD"); /* Left */
-                if (keysym == 0xFF52 || keysym == 0xFF97) return guac_terminal_send_string(term, "\x1BOA"); /* Up */
-                if (keysym == 0xFF53 || keysym == 0xFF98) return guac_terminal_send_string(term, "\x1BOC"); /* Right */
-                if (keysym == 0xFF54 || keysym == 0xFF99) return guac_terminal_send_string(term, "\x1BOB"); /* Down */
+
+                /* Left */
+                if (keysym == GUAC_TERMINAL_KEY_LEFT || keysym == GUAC_TERMINAL_KEY_KP_LEFT)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_APP_CURSOR_LEFT);
+
+                /* Up */
+                if (keysym == GUAC_TERMINAL_KEY_UP || keysym == GUAC_TERMINAL_KEY_KP_UP)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_APP_CURSOR_UP);
+
+                /* Right */
+                if (keysym == GUAC_TERMINAL_KEY_RIGHT || keysym == GUAC_TERMINAL_KEY_KP_RIGHT)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_APP_CURSOR_RIGHT);
+
+                /* Down */
+                if (keysym == GUAC_TERMINAL_KEY_DOWN || keysym == GUAC_TERMINAL_KEY_KP_DOWN)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_APP_CURSOR_DOWN);
             }
             else {
-                if (keysym == 0xFF51 || keysym == 0xFF96) return guac_terminal_send_string(term, "\x1B[D"); /* Left */
-                if (keysym == 0xFF52 || keysym == 0xFF97) return guac_terminal_send_string(term, "\x1B[A"); /* Up */
-                if (keysym == 0xFF53 || keysym == 0xFF98) return guac_terminal_send_string(term, "\x1B[C"); /* Right */
-                if (keysym == 0xFF54 || keysym == 0xFF99) return guac_terminal_send_string(term, "\x1B[B"); /* Down */
+
+                /* Left */
+                if (keysym == GUAC_TERMINAL_KEY_LEFT || keysym == GUAC_TERMINAL_KEY_KP_LEFT)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_CURSOR_LEFT);
+
+                /* Up */
+                if (keysym == GUAC_TERMINAL_KEY_UP || keysym == GUAC_TERMINAL_KEY_KP_UP)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_CURSOR_UP);
+
+                /* Right */
+                if (keysym == GUAC_TERMINAL_KEY_RIGHT || keysym == GUAC_TERMINAL_KEY_KP_RIGHT)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_CURSOR_RIGHT);
+
+                /* Down */
+                if (keysym == GUAC_TERMINAL_KEY_DOWN || keysym == GUAC_TERMINAL_KEY_KP_DOWN)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_CURSOR_DOWN);
             }
 
-            if (keysym == 0xFF55 || keysym == 0xFF9A) return guac_terminal_send_string(term, "\x1B[5~"); /* Page up */
-            if (keysym == 0xFF56 || keysym == 0xFF9B) return guac_terminal_send_string(term, "\x1B[6~"); /* Page down */
-            if (keysym == 0xFF57 || keysym == 0xFF9C) return guac_terminal_send_string(term, "\x1B[4~"); /* End */
+            /* Page up */
+            if (keysym == GUAC_TERMINAL_KEY_PAGEUP || keysym == GUAC_TERMINAL_KEY_KP_PAGEUP)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_PAGEUP);
 
-            if (keysym == 0xFF63 || keysym == 0xFF9E) return guac_terminal_send_string(term, "\x1B[2~"); /* Insert */
+            /* Page down */
+            if (keysym == GUAC_TERMINAL_KEY_PAGEDOWN || keysym == GUAC_TERMINAL_KEY_KP_PAGEDOWN)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_PAGEDOWN);
 
-            if (keysym == 0xFFBE || keysym == 0xFF91) return guac_terminal_send_string(term, "\x1B[[A"); /* F1  */
-            if (keysym == 0xFFBF || keysym == 0xFF92) return guac_terminal_send_string(term, "\x1B[[B"); /* F2  */
-            if (keysym == 0xFFC0 || keysym == 0xFF93) return guac_terminal_send_string(term, "\x1B[[C"); /* F3  */
-            if (keysym == 0xFFC1 || keysym == 0xFF94) return guac_terminal_send_string(term, "\x1B[[D"); /* F4  */
-            if (keysym == 0xFFC2) return guac_terminal_send_string(term, "\x1B[[E"); /* F5  */
+            /* End */
+            if (keysym == GUAC_TERMINAL_KEY_END || keysym == GUAC_TERMINAL_KEY_KP_END)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_END);
 
-            if (keysym == 0xFFC3) return guac_terminal_send_string(term, "\x1B[17~"); /* F6  */
-            if (keysym == 0xFFC4) return guac_terminal_send_string(term, "\x1B[18~"); /* F7  */
-            if (keysym == 0xFFC5) return guac_terminal_send_string(term, "\x1B[19~"); /* F8  */
-            if (keysym == 0xFFC6) return guac_terminal_send_string(term, "\x1B[20~"); /* F9  */
-            if (keysym == 0xFFC7) return guac_terminal_send_string(term, "\x1B[21~"); /* F10 */
-            if (keysym == 0xFFC8) return guac_terminal_send_string(term, "\x1B[22~"); /* F11 */
-            if (keysym == 0xFFC9) return guac_terminal_send_string(term, "\x1B[23~"); /* F12 */
+            /* Insert */
+            if (keysym == GUAC_TERMINAL_KEY_INSERT || keysym == GUAC_TERMINAL_KEY_KP_INSERT)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_INSERT);
 
-            if (keysym == 0xFFFF || keysym == 0xFF9F) return guac_terminal_send_string(term, "\x1B[3~"); /* Delete */
+            /* F1  */
+            if (term->func_keys_and_keypad == GUAC_TERMINAL_FUNC_KEYS_AND_KEYPAD_VT100) {
+                /* https://vt100.net/docs/vt100-ug/chapter3.html */
+                if (keysym == 0xFFBE || keysym == 0xFF91) return guac_terminal_send_string(term, "\x1BOP"); /* F1  */
+                if (keysym == 0xFFBF || keysym == 0xFF92) return guac_terminal_send_string(term, "\x1BOQ"); /* F2  */
+                if (keysym == 0xFFC0 || keysym == 0xFF93) return guac_terminal_send_string(term, "\x1BOR"); /* F3  */
+                if (keysym == 0xFFC1 || keysym == 0xFF94) return guac_terminal_send_string(term, "\x1BOS"); /* F4  */
+                /* Send this escape code, although the original VT100 did not have F5 */
+                if (keysym == 0xFFC2) return guac_terminal_send_string(term, "\x1B[15~"); /* F5  */
+            }
+            else {
+                if (keysym == GUAC_TERMINAL_KEY_F1 || keysym == GUAC_TERMINAL_KEY_KP_F1)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F1);
+
+                /* F2  */
+                if (keysym == GUAC_TERMINAL_KEY_F2 || keysym == GUAC_TERMINAL_KEY_KP_F2)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F2);
+
+                /* F3  */
+                if (keysym == GUAC_TERMINAL_KEY_F3 || keysym == GUAC_TERMINAL_KEY_KP_F3)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F3);
+
+                /* F4  */
+                if (keysym == GUAC_TERMINAL_KEY_F4 || keysym == GUAC_TERMINAL_KEY_KP_F4)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F4);
+
+                /* F5  */
+                if (keysym == GUAC_TERMINAL_KEY_F5)
+                    return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F5);
+
+            }
+            /* F6  */
+            if (keysym == GUAC_TERMINAL_KEY_F6)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F6);
+
+            /* F7  */ 
+            if (keysym == GUAC_TERMINAL_KEY_F7)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F7);
+
+            /* F8  */
+            if (keysym == GUAC_TERMINAL_KEY_F8)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F8);
+
+            /* F9  */
+            if (keysym == GUAC_TERMINAL_KEY_F9)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F9);
+
+            /* F10 */
+            if (keysym == GUAC_TERMINAL_KEY_F10)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F10);
+
+            /* F11 */
+            if (keysym == GUAC_TERMINAL_KEY_F11)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F11);
+
+            /* F12 */
+            if (keysym == GUAC_TERMINAL_KEY_F12)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_F12);
+
+            /* Delete */
+            if (keysym == GUAC_TERMINAL_KEY_DELETE || keysym == GUAC_TERMINAL_KEY_KP_DELETE)
+                return guac_terminal_send_string(term, GUAC_TERMINAL_ESC_SEQ_DELETE);
 
             /* Ignore unknown keys */
             guac_client_log(term->client, GUAC_LOG_DEBUG,
@@ -1713,8 +1897,8 @@ static void guac_terminal_double_click(guac_terminal* terminal, int row, int col
     }
 
     /* Select and add to clipboard the "word" */
-    guac_terminal_select_start(terminal, row, word_head);
-    guac_terminal_select_update(terminal, row, word_tail);
+    guac_terminal_select_start(terminal, row, word_head, GUAC_TERMINAL_COLUMN_SIDE_LEFT);
+    guac_terminal_select_update(terminal, row, word_tail, GUAC_TERMINAL_COLUMN_SIDE_RIGHT);
 
 }
 
@@ -1778,11 +1962,16 @@ static int __guac_terminal_send_mouse(guac_terminal* term, guac_user* user,
         int row = y / term->display->char_height - term->scroll_offset;
         int col = x / term->display->char_width;
 
+        /* Determine if x is on the left or right half of the column */
+        int char_x_offset = x % term->display->char_width;
+        guac_terminal_column_side side = char_x_offset < (term->display->char_width / 2) ?
+            GUAC_TERMINAL_COLUMN_SIDE_LEFT : GUAC_TERMINAL_COLUMN_SIDE_RIGHT;
+
         /* If mouse button was already just pressed, start a new selection or
          * resume the existing selection depending on whether shift is held */
         if (pressed_mask & GUAC_CLIENT_MOUSE_LEFT) {
             if (term->mod_shift)
-                guac_terminal_select_resume(term, row, col);
+                guac_terminal_select_resume(term, row, col, side);
             else {
 
                 /* Reset click counter if last click was 300ms before */
@@ -1796,7 +1985,7 @@ static int __guac_terminal_send_mouse(guac_terminal* term, guac_user* user,
 
                     /* First click = start selection */
                     case 0:
-                        guac_terminal_select_start(term, row, col);
+                        guac_terminal_select_start(term, row, col, side);
                         break;
                     
                     /* Second click = word selection */
@@ -1806,8 +1995,8 @@ static int __guac_terminal_send_mouse(guac_terminal* term, guac_user* user,
 
                     /* third click or more = line selection */
                     default:
-                        guac_terminal_select_start(term, row, 0);
-                        guac_terminal_select_update(term, row, term->display->width);
+                        guac_terminal_select_start(term, row, 0, GUAC_TERMINAL_COLUMN_SIDE_LEFT);
+                        guac_terminal_select_update(term, row, term->display->width, GUAC_TERMINAL_COLUMN_SIDE_RIGHT);
                         break;
                 }
             }
@@ -1816,7 +2005,7 @@ static int __guac_terminal_send_mouse(guac_terminal* term, guac_user* user,
         /* In all other cases, simply update the existing selection as long as
          * the mouse button is pressed */
         else
-            guac_terminal_select_update(term, row, col);
+            guac_terminal_select_update(term, row, col, side);
 
     }
 
@@ -2037,16 +2226,16 @@ int guac_terminal_create_typescript(guac_terminal* term, const char* path,
 
     /* Log failure */
     if (term->typescript == NULL) {
-        guac_client_log(term->client, GUAC_LOG_ERROR,
-                "Creation of typescript failed: %s", strerror(errno));
+        guac_client_log(term->client, GUAC_LOG_ERROR, "Creation of typescript "
+                "failed: %s: %s", guac_error_message,
+                guac_status_string(guac_error));
         return 1;
     }
 
     /* If typescript was successfully created, log filenames */
-    guac_client_log(term->client, GUAC_LOG_INFO,
-            "Typescript of terminal session will be saved to \"%s\". "
-            "Timing file is \"%s\".",
-            term->typescript->data_filename,
+    guac_client_log(term->client, GUAC_LOG_INFO, "Typescript of terminal "
+            "session will be saved within \"%s\" to \"%s\". Corresponding "
+            "timing file is \"%s\".", path, term->typescript->data_filename,
             term->typescript->timing_filename);
 
     /* Typescript creation succeeded */
@@ -2202,14 +2391,17 @@ void guac_terminal_clipboard_append(guac_terminal* terminal,
         const char* data, int length) {
 
     /* Allocate and clear space for the converted data */
-    char output_data[GUAC_COMMON_CLIPBOARD_MAX_LENGTH];
+    int output_buf_size = terminal->clipboard->available;
+    char* output_data = guac_mem_alloc(output_buf_size);
     char* output = output_data;
 
     /* Convert clipboard contents */
     guac_iconv(GUAC_READ_UTF8_NORMALIZED, &data, length,
-            GUAC_WRITE_UTF8, &output, GUAC_COMMON_CLIPBOARD_MAX_LENGTH);
+            GUAC_WRITE_UTF8, &output, output_buf_size);
 
     guac_common_clipboard_append(terminal->clipboard, output_data, output - output_data);
+    
+    guac_mem_free(output_data);
 }
 
 void guac_terminal_remove_user(guac_terminal* terminal, guac_user* user) {

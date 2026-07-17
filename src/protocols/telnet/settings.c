@@ -21,6 +21,7 @@
 
 #include "argv.h"
 #include "common/defaults.h"
+#include "common/clipboard.h"
 #include "settings.h"
 #include "terminal/terminal.h"
 
@@ -59,10 +60,12 @@ const char* GUAC_TELNET_CLIENT_ARGS[] = {
     "recording-write-existing",
     "read-only",
     "backspace",
+    "func-keys-and-keypad",
     "terminal-type",
     "scrollback",
     "login-success-regex",
     "login-failure-regex",
+    "clipboard-buffer-size",
     "disable-copy",
     "disable-paste",
     "wol-send-packet",
@@ -220,6 +223,12 @@ enum TELNET_ARGS_IDX {
     IDX_BACKSPACE,
 
     /**
+     * The family of codes (e.g. vt100) which will be used when you push
+     * the function and keypad keys.
+     */
+    IDX_FUNC_KEYS_AND_KEYPAD,
+
+    /**
      * The terminal emulator type that is passed to the remote system (e.g.
      * "xterm" or "xterm-256color"). "linux" is used if unspecified.
      */
@@ -247,6 +256,11 @@ enum TELNET_ARGS_IDX {
      * success/failure has been determined.
      */
     IDX_LOGIN_FAILURE_REGEX,
+
+    /**
+     * The maximum number of bytes to allow within the clipboard.
+     */
+    IDX_CLIPBOARD_BUFFER_SIZE,
 
     /**
      * Whether outbound clipboard access should be blocked. If set to "true",
@@ -515,10 +529,36 @@ guac_telnet_settings* guac_telnet_parse_args(guac_user* user,
         guac_user_parse_args_int(user, GUAC_TELNET_CLIENT_ARGS, argv,
                 IDX_BACKSPACE, GUAC_TERMINAL_DEFAULT_BACKSPACE);
 
+    /* Copy the family of codes for function keys and keypad */
+    settings->func_keys_and_keypad =
+        guac_user_parse_args_string(user, GUAC_TELNET_CLIENT_ARGS, argv,
+                IDX_FUNC_KEYS_AND_KEYPAD, "");
+
     /* Read terminal emulator type. */
     settings->terminal_type =
         guac_user_parse_args_string(user, GUAC_TELNET_CLIENT_ARGS, argv,
                 IDX_TERMINAL_TYPE, "linux");
+
+    /* Set the maximum number of bytes to allow within the clipboard. */
+    settings->clipboard_buffer_size =
+        guac_user_parse_args_int(user, GUAC_TELNET_CLIENT_ARGS, argv,
+                IDX_CLIPBOARD_BUFFER_SIZE, 0);
+
+    /* Use default clipboard buffer size if given one is invalid. */
+    if (settings->clipboard_buffer_size < GUAC_COMMON_CLIPBOARD_MIN_LENGTH) {
+        settings->clipboard_buffer_size = GUAC_COMMON_CLIPBOARD_MIN_LENGTH;
+        guac_user_log(user, GUAC_LOG_INFO, "Unspecified or invalid clipboard buffer "
+                "size: \"%s\". Using the default minimum size: %i.",
+                argv[IDX_CLIPBOARD_BUFFER_SIZE],
+                settings->clipboard_buffer_size);
+    }
+    else if (settings->clipboard_buffer_size > GUAC_COMMON_CLIPBOARD_MAX_LENGTH) {
+        settings->clipboard_buffer_size = GUAC_COMMON_CLIPBOARD_MAX_LENGTH;
+        guac_user_log(user, GUAC_LOG_WARNING, "Invalid clipboard buffer "
+                "size: \"%s\". Using the default maximum size: %i.",
+                argv[IDX_CLIPBOARD_BUFFER_SIZE],
+                settings->clipboard_buffer_size);
+    }
 
     /* Parse clipboard copy disable flag */
     settings->disable_copy =
@@ -539,8 +579,8 @@ guac_telnet_settings* guac_telnet_parse_args(guac_user* user,
         
         /* If WoL has been enabled but no MAC provided, log warning and disable. */
         if(strcmp(argv[IDX_WOL_MAC_ADDR], "") == 0) {
-            guac_user_log(user, GUAC_LOG_WARNING, "Wake on LAN was requested, ",
-                    "but no MAC address was specified.  WoL will not be sent.");
+            guac_user_log(user, GUAC_LOG_WARNING, "WoL was enabled, but no "
+                    "MAC address was provided. WoL will not be sent.");
             settings->wol_send_packet = false;
         }
         
