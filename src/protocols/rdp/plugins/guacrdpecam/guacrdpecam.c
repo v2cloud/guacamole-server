@@ -82,8 +82,6 @@ static void guac_rdp_rdpecam_mapping_clear(
 static void guac_rdp_rdpecam_mapping_free(
         guac_rdp_rdpecam_plugin* plugin,
         guac_rdp_rdpecam_device_mapping* mapping);
-static void guac_rdp_rdpecam_mapping_remove_by_channel(
-        guac_rdp_rdpecam_plugin* plugin, const char* channel_name);
 static void guac_rdp_rdpecam_mapping_remove_by_device_id(
         guac_rdp_rdpecam_plugin* plugin, const char* device_id);
 static const char* guac_rdp_rdpecam_mapping_device_id_for_channel(
@@ -2404,35 +2402,6 @@ static void guac_rdp_rdpecam_mapping_remove_by_device_id(
 
     while (current) {
         if (current->device_id_key && strcmp(current->device_id_key, device_id) == 0) {
-
-            if (prev)
-                prev->next = current->next;
-            else
-                plugin->device_id_mappings = current->next;
-
-            guac_rdp_rdpecam_mapping_free(plugin, current);
-            return;
-        }
-
-        prev = current;
-        current = current->next;
-    }
-}
-
-/**
- * Removes the mapping entry associated with the given channel name, if present.
- */
-static void guac_rdp_rdpecam_mapping_remove_by_channel(
-        guac_rdp_rdpecam_plugin* plugin, const char* channel_name) {
-
-    if (!plugin || !channel_name)
-        return;
-
-    guac_rdp_rdpecam_device_mapping* prev = NULL;
-    guac_rdp_rdpecam_device_mapping* current = plugin->device_id_mappings;
-
-    while (current) {
-        if (current->channel_name && strcmp(current->channel_name, channel_name) == 0) {
 
             if (prev)
                 prev->next = current->next;
