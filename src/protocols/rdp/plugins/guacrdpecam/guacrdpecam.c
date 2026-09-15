@@ -86,6 +86,8 @@ static void guac_rdp_rdpecam_mapping_remove_by_channel(
         guac_rdp_rdpecam_plugin* plugin, const char* channel_name);
 static void guac_rdp_rdpecam_mapping_remove_by_device_id(
         guac_rdp_rdpecam_plugin* plugin, const char* device_id);
+static const char* guac_rdp_rdpecam_mapping_device_id_for_channel(
+        guac_rdp_rdpecam_plugin* plugin, const char* channel_name);
 static BOOL guac_rdp_rdpecam_mapping_add(
         guac_rdp_rdpecam_plugin* plugin, const char* device_id,
         const char* channel_name);
@@ -281,12 +283,42 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
     }
 
     guac_client_log(client, GUAC_LOG_DEBUG,
-            "RDPECAM caps_notify: removing previously advertised channels before rebuild");
+            "RDPECAM caps_notify: removing channels whose camera is gone");
 
-    /* Send DeviceRemovedNotification for each channel currently mapped. */
-    while (plugin->device_id_mappings) {
-        guac_rdp_rdpecam_device_mapping* mapping = plugin->device_id_mappings;
-        plugin->device_id_mappings = mapping->next;
+    /*
+     * Send DeviceRemovedNotification only for cameras the browser no longer
+     * offers. Removing and re-adding an unchanged camera would destroy and
+     * recreate its sink, interrupting anything using it.
+     */
+    guac_rdp_rdpecam_device_mapping* prev_mapping = NULL;
+    guac_rdp_rdpecam_device_mapping* mapping = plugin->device_id_mappings;
+
+    while (mapping) {
+
+        guac_rdp_rdpecam_device_mapping* next_mapping = mapping->next;
+
+        /* Keep this channel if its camera is still on offer */
+        int still_offered = 0;
+        for (unsigned int i = 0; i < new_device_count && !still_offered; i++) {
+            if (new_device_ids[i] && mapping->device_id_key
+                    && strcmp(new_device_ids[i], mapping->device_id_key) == 0)
+                still_offered = 1;
+        }
+
+        if (still_offered) {
+            guac_client_log(client, GUAC_LOG_DEBUG,
+                    "RDPECAM keeping channel '%s', its camera is still offered",
+                    mapping->channel_name);
+            prev_mapping = mapping;
+            mapping = next_mapping;
+            continue;
+        }
+
+        /* Unlink before tearing down */
+        if (prev_mapping)
+            prev_mapping->next = next_mapping;
+        else
+            plugin->device_id_mappings = next_mapping;
 
         const char* channel_name = mapping->channel_name;
         guac_client_log(client, GUAC_LOG_DEBUG,
@@ -335,6 +367,7 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
                 "RDPECAM caps_notify: completed removal notification for channel '%s'", channel_name);
 
         guac_rdp_rdpecam_mapping_free(plugin, mapping);
+        mapping = next_mapping;
     }
 
     guac_client_log(client, GUAC_LOG_DEBUG,
@@ -350,7 +383,19 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
         for (unsigned int i = 0; i < new_device_count; i++) {
             guac_rdp_rdpecam_device_caps* caps = &rdp_client->rdpecam_device_caps[i];
 
-            /* Find next available channel index (device_id_map was just cleared, so all devices need assignment) */
+            /* Cameras that kept their channel through the removal pass are
+             * already advertised, and re-advertising one would make the guest
+             * drop and re-open it */
+            if (caps->device_id && plugin->device_id_map
+                    && HashTable_GetItemValue(plugin->device_id_map,
+                        (void*) caps->device_id) != NULL) {
+                guac_client_log(client, GUAC_LOG_DEBUG,
+                        "RDPECAM device '%s' is already advertised, leaving it alone",
+                        caps->device_id);
+                continue;
+            }
+
+            /* Find a channel index not already taken by an advertised camera */
             char channel_name[64];
             unsigned int assigned_channel_idx = 0;
             int found_slot = 0;
@@ -2228,28 +2273,28 @@ static guac_rdpecam_device* guac_rdpecam_device_create(
     }
     strcpy(device->device_name, device_name);
 
-    guac_rdp_client* rdp_client = plugin->client ? (guac_rdp_client*) plugin->client->data : NULL;
+    /* Take the browser device ID from this channel's mapping rather than from
+     * the capability array. A channel keeps its slot across capability updates,
+     * while the array is rebuilt and repacked from zero each time, so indexing
+     * the array by channel number hands back whichever camera happens to sit at
+     * that position - the wrong one, once a camera has been removed. */
+    const char* mapped_device_id =
+        guac_rdp_rdpecam_mapping_device_id_for_channel(plugin, device_name);
 
-    /* Extract device index from channel name (e.g., "RDCamera_Device_0" -> 0) */
-    unsigned int device_index = 0;
-    if (rdp_client && sscanf(device_name, "RDCamera_Device_%u", &device_index) == 1) {
-        /* Look up device capabilities and browser device ID */
-        guac_rwlock_acquire_read_lock(&(rdp_client->lock));
-        if (device_index < rdp_client->rdpecam_device_caps_count) {
-            guac_rdp_rdpecam_device_caps* caps = &rdp_client->rdpecam_device_caps[device_index];
-            if (caps->device_id && caps->device_id[0] != '\0') {
-                size_t id_len = strlen(caps->device_id);
-                device->browser_device_id = guac_mem_alloc(id_len + 1);
-                if (device->browser_device_id) {
-                    memcpy(device->browser_device_id, caps->device_id, id_len + 1);
-                    guac_client_log(plugin->client, GUAC_LOG_DEBUG,
-                            "RDPECAM device %s mapped to browser device ID: %s",
-                            device_name, device->browser_device_id);
-                }
-            }
+    if (mapped_device_id && mapped_device_id[0] != '\0') {
+        size_t id_len = strlen(mapped_device_id);
+        device->browser_device_id = guac_mem_alloc(id_len + 1);
+        if (device->browser_device_id) {
+            memcpy(device->browser_device_id, mapped_device_id, id_len + 1);
+            guac_client_log(plugin->client, GUAC_LOG_DEBUG,
+                    "RDPECAM device %s mapped to browser device ID: %s",
+                    device_name, device->browser_device_id);
         }
-        guac_rwlock_release_lock(&(rdp_client->lock));
     }
+    else
+        guac_client_log(plugin->client, GUAC_LOG_WARNING,
+                "RDPECAM channel %s has no device mapping; leaving its browser "
+                "device ID unset rather than guessing at one", device_name);
 
     /* Always create a fresh per-device sink for each device.
      * Note: rdp_client->rdpecam_sink is used as a pointer to the active device's sink
@@ -2401,6 +2446,40 @@ static void guac_rdp_rdpecam_mapping_remove_by_channel(
         prev = current;
         current = current->next;
     }
+}
+
+/**
+ * Returns the browser device ID currently mapped to the given channel, or NULL
+ * if the channel has no mapping. The returned string is owned by the mapping,
+ * so it is only valid for as long as that mapping lives.
+ *
+ * As with the other mapping helpers, the caller must hold registry_lock.
+ *
+ * @param plugin
+ *     The RDPECAM plugin instance.
+ *
+ * @param channel_name
+ *     The channel to look up, e.g. "RDCamera_Device_0".
+ *
+ * @return
+ *     The browser device ID mapped to the channel, or NULL if there is none.
+ */
+static const char* guac_rdp_rdpecam_mapping_device_id_for_channel(
+        guac_rdp_rdpecam_plugin* plugin, const char* channel_name) {
+
+    if (!plugin || !channel_name)
+        return NULL;
+
+    guac_rdp_rdpecam_device_mapping* current = plugin->device_id_mappings;
+
+    while (current) {
+        if (current->channel_name
+                && strcmp(current->channel_name, channel_name) == 0)
+            return current->device_id_key;
+        current = current->next;
+    }
+
+    return NULL;
 }
 
 /**
