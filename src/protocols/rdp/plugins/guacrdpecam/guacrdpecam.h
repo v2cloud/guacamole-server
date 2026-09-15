@@ -294,6 +294,15 @@ typedef struct guac_rdp_rdpecam_plugin {
     struct guac_rdp_rdpecam_device_mapping* device_id_mappings;
 
     /**
+     * Mutex guarding devices, device_id_map, and device_id_mappings.
+     * Capability updates are handled on the user input thread while FreeRDP
+     * opens and closes device channels on its own thread. Recursive, as the
+     * helpers that touch the registry are also called from longer sequences
+     * that already hold it.
+     */
+    pthread_mutex_t registry_lock;
+
+    /**
      * The guac_client instance associated with the RDP connection using the
      * RDPECAM plugin.
      */

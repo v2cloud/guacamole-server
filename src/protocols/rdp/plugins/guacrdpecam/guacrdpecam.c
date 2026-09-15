@@ -65,8 +65,12 @@
  * a linked list to allow deterministic cleanup of allocated memory.
  */
 typedef struct guac_rdp_rdpecam_device_mapping {
-    /** Pointer to the browser device ID string used as the hash key. */
-    const char* device_id_key;
+    /**
+     * Copy of the browser device ID, used as the hash key. Must be owned: the
+     * IDs passed to guac_rdp_rdpecam_mapping_add() are freed by the next
+     * capability update.
+     */
+    char* device_id_key;
     /** Copy of the channel name advertised to Windows. */
     char* channel_name;
     /** Next entry in the linked list. */
@@ -75,10 +79,13 @@ typedef struct guac_rdp_rdpecam_device_mapping {
 
 static void guac_rdp_rdpecam_mapping_clear(
         guac_rdp_rdpecam_plugin* plugin);
-static void guac_rdp_rdpecam_mapping_remove_by_channel(
-        guac_rdp_rdpecam_plugin* plugin, const char* channel_name);
+static void guac_rdp_rdpecam_mapping_free(
+        guac_rdp_rdpecam_plugin* plugin,
+        guac_rdp_rdpecam_device_mapping* mapping);
 static void guac_rdp_rdpecam_mapping_remove_by_device_id(
         guac_rdp_rdpecam_plugin* plugin, const char* device_id);
+static const char* guac_rdp_rdpecam_mapping_device_id_for_channel(
+        guac_rdp_rdpecam_plugin* plugin, const char* channel_name);
 static BOOL guac_rdp_rdpecam_mapping_add(
         guac_rdp_rdpecam_plugin* plugin, const char* device_id,
         const char* channel_name);
@@ -250,6 +257,10 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
         return;
     }
 
+    /* Held across the whole rebuild, which tears the registry down, builds it
+     * back up, and picks channel slots from what it finds there */
+    pthread_mutex_lock(&plugin->registry_lock);
+
     guac_client_log(client, GUAC_LOG_DEBUG,
             "RDPECAM caps_notify: processing capability update");
 
@@ -270,12 +281,42 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
     }
 
     guac_client_log(client, GUAC_LOG_DEBUG,
-            "RDPECAM caps_notify: removing previously advertised channels before rebuild");
+            "RDPECAM caps_notify: removing channels whose camera is gone");
 
-    /* Send DeviceRemovedNotification for each channel currently mapped. */
-    while (plugin->device_id_mappings) {
-        guac_rdp_rdpecam_device_mapping* mapping = plugin->device_id_mappings;
-        plugin->device_id_mappings = mapping->next;
+    /*
+     * Send DeviceRemovedNotification only for cameras the browser no longer
+     * offers. Removing and re-adding an unchanged camera would destroy and
+     * recreate its sink, interrupting anything using it.
+     */
+    guac_rdp_rdpecam_device_mapping* prev_mapping = NULL;
+    guac_rdp_rdpecam_device_mapping* mapping = plugin->device_id_mappings;
+
+    while (mapping) {
+
+        guac_rdp_rdpecam_device_mapping* next_mapping = mapping->next;
+
+        /* Keep this channel if its camera is still on offer */
+        int still_offered = 0;
+        for (unsigned int i = 0; i < new_device_count && !still_offered; i++) {
+            if (new_device_ids[i] && mapping->device_id_key
+                    && strcmp(new_device_ids[i], mapping->device_id_key) == 0)
+                still_offered = 1;
+        }
+
+        if (still_offered) {
+            guac_client_log(client, GUAC_LOG_DEBUG,
+                    "RDPECAM keeping channel '%s', its camera is still offered",
+                    mapping->channel_name);
+            prev_mapping = mapping;
+            mapping = next_mapping;
+            continue;
+        }
+
+        /* Unlink before tearing down */
+        if (prev_mapping)
+            prev_mapping->next = next_mapping;
+        else
+            plugin->device_id_mappings = next_mapping;
 
         const char* channel_name = mapping->channel_name;
         guac_client_log(client, GUAC_LOG_DEBUG,
@@ -319,15 +360,12 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
             guac_rdpecam_device_destroy(device);
         }
 
-        if (plugin->device_id_map)
-            HashTable_Remove(plugin->device_id_map, (void*) mapping->device_id_key);
-
-        if (mapping->channel_name)
-            guac_mem_free(mapping->channel_name);
-        guac_mem_free(mapping);
-
+        /* Log before the entry goes away - channel_name points into it */
         guac_client_log(client, GUAC_LOG_DEBUG,
                 "RDPECAM caps_notify: completed removal notification for channel '%s'", channel_name);
+
+        guac_rdp_rdpecam_mapping_free(plugin, mapping);
+        mapping = next_mapping;
     }
 
     guac_client_log(client, GUAC_LOG_DEBUG,
@@ -343,7 +381,19 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
         for (unsigned int i = 0; i < new_device_count; i++) {
             guac_rdp_rdpecam_device_caps* caps = &rdp_client->rdpecam_device_caps[i];
 
-            /* Find next available channel index (device_id_map was just cleared, so all devices need assignment) */
+            /* Cameras that kept their channel through the removal pass are
+             * already advertised, and re-advertising one would make the guest
+             * drop and re-open it */
+            if (caps->device_id && plugin->device_id_map
+                    && HashTable_GetItemValue(plugin->device_id_map,
+                        (void*) caps->device_id) != NULL) {
+                guac_client_log(client, GUAC_LOG_DEBUG,
+                        "RDPECAM device '%s' is already advertised, leaving it alone",
+                        caps->device_id);
+                continue;
+            }
+
+            /* Find a channel index not already taken by an advertised camera */
             char channel_name[64];
             unsigned int assigned_channel_idx = 0;
             int found_slot = 0;
@@ -475,6 +525,7 @@ void guac_rdp_rdpecam_caps_notify(guac_client* client) {
     }
 
     rdp_client->rdpecam_caps_updated = 0;
+    pthread_mutex_unlock(&plugin->registry_lock);
     guac_rwlock_release_lock(&(rdp_client->lock));
 
     guac_client_log(client, GUAC_LOG_DEBUG,
@@ -1856,13 +1907,17 @@ static UINT guac_rdp_rdpecam_close(IWTSVirtualChannelCallback* channel_callback)
             if (!closing_stream_channel)
                 guac_rdpecam_signal_stop(device->sink);
 
-            /* Remove from registry; explicitly destroy device afterwards. */
+            /* Remove from registry; explicitly destroy device afterwards.
+             * Held across both so a capability update cannot observe - or
+             * re-register - a device that is already being torn down. */
             guac_rdpecam_device* to_destroy = device;
+            pthread_mutex_lock(&plugin->registry_lock);
             if (HashTable_Remove(plugin->devices, (void*) ch_name)) {
                 guac_client_log(rdpecam_channel_callback->client, GUAC_LOG_DEBUG,
                     "RDPECAM device removed from registry: %s", ch_name);
                 guac_rdpecam_device_destroy(to_destroy);
             }
+            pthread_mutex_unlock(&plugin->registry_lock);
         }
         else if (remaining_refs != 0) {
             guac_client_log(rdpecam_channel_callback->client, GUAC_LOG_DEBUG,
@@ -1928,6 +1983,10 @@ static UINT guac_rdp_rdpecam_new_connection(
 
     if (strcasecmp(ch_name, GUAC_RDPECAM_CHANNEL_NAME) != 0) {
 
+        /* Look up and register as one step - a capability update running on the
+         * user input thread may be rebuilding this same registry */
+        pthread_mutex_lock(&plugin->registry_lock);
+
         /* Handle device channel connections. */
         device = guac_rdpecam_device_lookup(plugin, ch_name);
 
@@ -1936,6 +1995,7 @@ static UINT guac_rdp_rdpecam_new_connection(
             if (!device) {
                 guac_client_log(client, GUAC_LOG_ERROR,
                     "Failed to create RDPECAM device: %s", ch_name);
+                pthread_mutex_unlock(&plugin->registry_lock);
                 *accept = 0;
                 return CHANNEL_RC_OK;
             }
@@ -1954,6 +2014,7 @@ static UINT guac_rdp_rdpecam_new_connection(
                 guac_client_log(client, GUAC_LOG_ERROR,
                     "Failed to insert RDPECAM device into registry: %s", ch_name);
                 guac_rdpecam_device_destroy(device);
+                pthread_mutex_unlock(&plugin->registry_lock);
                 *accept = 0;
                 return CHANNEL_RC_OK;
             }
@@ -1971,6 +2032,8 @@ static UINT guac_rdp_rdpecam_new_connection(
                 "Reusing existing RDPECAM device: %s (ref_count=%d)",
                 ch_name, device->ref_count);
         }
+
+        pthread_mutex_unlock(&plugin->registry_lock);
 
     }
     /* The control/enumerator channel intentionally proceeds without a device. */
@@ -2001,6 +2064,21 @@ static UINT guac_rdp_rdpecam_new_connection(
     /* Messages will be sent in OnOpen callback, not here */
     return CHANNEL_RC_OK;
 
+}
+
+/**
+ * Configures the given hash table to compare, clone, and free its keys as
+ * strings. HashTable_New() compares keys by pointer, which cannot work for a
+ * table keyed by name: each device listener allocates its own copy of the name.
+ *
+ * @param table
+ *     The hash table to configure.
+ */
+static void guac_rdp_rdpecam_use_string_keys(wHashTable* table) {
+    table->hash = HashTable_StringHash;
+    table->keyCompare = HashTable_StringCompare;
+    table->keyClone = HashTable_StringClone;
+    table->keyFree = HashTable_StringFree;
 }
 
 /**
@@ -2038,28 +2116,50 @@ static UINT guac_rdp_rdpecam_initialize(IWTSPlugin* plugin,
     control_listener->parent.OnNewChannelConnection = guac_rdp_rdpecam_new_connection;
     rdpecam_plugin->control_listener_callback = control_listener;
 
-    /* Initialize hash table for multi-device support */
-    rdpecam_plugin->devices = HashTable_New(FALSE);
-    if (!rdpecam_plugin->devices) {
+    /* Guards the registry against the user input thread and FreeRDP's channel
+     * thread reaching it at the same time (see registry_lock) */
+    pthread_mutexattr_t registry_lock_attr;
+    pthread_mutexattr_init(&registry_lock_attr);
+    pthread_mutexattr_settype(&registry_lock_attr, PTHREAD_MUTEX_RECURSIVE);
+    int registry_lock_status = pthread_mutex_init(&rdpecam_plugin->registry_lock,
+            &registry_lock_attr);
+    pthread_mutexattr_destroy(&registry_lock_attr);
+
+    if (registry_lock_status != 0) {
         guac_client_log(rdpecam_plugin->client, GUAC_LOG_ERROR,
-            "Failed to create device hash table");
+            "Failed to initialize RDPECAM registry mutex");
         guac_mem_free(control_listener);
         return CHANNEL_RC_NO_MEMORY;
     }
 
+    /* Initialize hash table for multi-device support. Synchronized, so that
+     * single operations are safe even outside a registry_lock section. */
+    rdpecam_plugin->devices = HashTable_New(TRUE);
+    if (!rdpecam_plugin->devices) {
+        guac_client_log(rdpecam_plugin->client, GUAC_LOG_ERROR,
+            "Failed to create device hash table");
+        pthread_mutex_destroy(&rdpecam_plugin->registry_lock);
+        guac_mem_free(control_listener);
+        return CHANNEL_RC_NO_MEMORY;
+    }
+    guac_rdp_rdpecam_use_string_keys(rdpecam_plugin->devices);
+
     /* Initialize hash table for device ID to channel name mapping */
-    rdpecam_plugin->device_id_map = HashTable_New(FALSE);
+    rdpecam_plugin->device_id_map = HashTable_New(TRUE);
     rdpecam_plugin->device_id_mappings = NULL;
     if (!rdpecam_plugin->device_id_map) {
         guac_client_log(rdpecam_plugin->client, GUAC_LOG_ERROR,
             "Failed to create device ID map hash table");
         HashTable_Free(rdpecam_plugin->devices);
+        pthread_mutex_destroy(&rdpecam_plugin->registry_lock);
         guac_mem_free(control_listener);
         return CHANNEL_RC_NO_MEMORY;
     }
+    guac_rdp_rdpecam_use_string_keys(rdpecam_plugin->device_id_map);
 
-    /* Hash table keys use stable pointers; explicit destruction is handled
-     * on removal/termination. */
+    /* Both tables clone their keys, so lookups and removals work with any
+     * buffer holding the right name; values are destroyed explicitly on
+     * removal/termination. */
 
     /* Keep manager for later (dynamic device channel creation) */
     rdpecam_plugin->manager = manager;
@@ -2096,6 +2196,8 @@ static UINT guac_rdp_rdpecam_terminated(IWTSPlugin* plugin) {
         rdpecam_plugin->control_listener_callback = NULL;
     }
 
+    pthread_mutex_lock(&rdpecam_plugin->registry_lock);
+
     /* Destroy all devices in hash table */
     if (rdpecam_plugin->devices != NULL) {
         /* Iterate through channel slots instead of using broken HashTable_GetKeys */
@@ -2121,7 +2223,10 @@ static UINT guac_rdp_rdpecam_terminated(IWTSPlugin* plugin) {
         rdpecam_plugin->device_id_map = NULL;
     }
 
-    guac_client_log(rdpecam_plugin->client, GUAC_LOG_DEBUG, 
+    pthread_mutex_unlock(&rdpecam_plugin->registry_lock);
+    pthread_mutex_destroy(&rdpecam_plugin->registry_lock);
+
+    guac_client_log(rdpecam_plugin->client, GUAC_LOG_DEBUG,
         "RDPECAM plugin terminated - all devices destroyed");
 
     return CHANNEL_RC_OK;
@@ -2166,28 +2271,28 @@ static guac_rdpecam_device* guac_rdpecam_device_create(
     }
     strcpy(device->device_name, device_name);
 
-    guac_rdp_client* rdp_client = plugin->client ? (guac_rdp_client*) plugin->client->data : NULL;
+    /* Take the browser device ID from this channel's mapping rather than from
+     * the capability array. A channel keeps its slot across capability updates,
+     * while the array is rebuilt and repacked from zero each time, so indexing
+     * the array by channel number hands back whichever camera happens to sit at
+     * that position - the wrong one, once a camera has been removed. */
+    const char* mapped_device_id =
+        guac_rdp_rdpecam_mapping_device_id_for_channel(plugin, device_name);
 
-    /* Extract device index from channel name (e.g., "RDCamera_Device_0" -> 0) */
-    unsigned int device_index = 0;
-    if (rdp_client && sscanf(device_name, "RDCamera_Device_%u", &device_index) == 1) {
-        /* Look up device capabilities and browser device ID */
-        guac_rwlock_acquire_read_lock(&(rdp_client->lock));
-        if (device_index < rdp_client->rdpecam_device_caps_count) {
-            guac_rdp_rdpecam_device_caps* caps = &rdp_client->rdpecam_device_caps[device_index];
-            if (caps->device_id && caps->device_id[0] != '\0') {
-                size_t id_len = strlen(caps->device_id);
-                device->browser_device_id = guac_mem_alloc(id_len + 1);
-                if (device->browser_device_id) {
-                    memcpy(device->browser_device_id, caps->device_id, id_len + 1);
-                    guac_client_log(plugin->client, GUAC_LOG_DEBUG,
-                            "RDPECAM device %s mapped to browser device ID: %s",
-                            device_name, device->browser_device_id);
-                }
-            }
+    if (mapped_device_id && mapped_device_id[0] != '\0') {
+        size_t id_len = strlen(mapped_device_id);
+        device->browser_device_id = guac_mem_alloc(id_len + 1);
+        if (device->browser_device_id) {
+            memcpy(device->browser_device_id, mapped_device_id, id_len + 1);
+            guac_client_log(plugin->client, GUAC_LOG_DEBUG,
+                    "RDPECAM device %s mapped to browser device ID: %s",
+                    device_name, device->browser_device_id);
         }
-        guac_rwlock_release_lock(&(rdp_client->lock));
     }
+    else
+        guac_client_log(plugin->client, GUAC_LOG_WARNING,
+                "RDPECAM channel %s has no device mapping; leaving its browser "
+                "device ID unset rather than guessing at one", device_name);
 
     /* Always create a fresh per-device sink for each device.
      * Note: rdp_client->rdpecam_sink is used as a pointer to the active device's sink
@@ -2260,6 +2365,30 @@ static guac_rdpecam_device* guac_rdpecam_device_create(
 }
 
 /**
+ * Removes a mapping from device_id_map and frees it. The map entry has to go
+ * first, as it is keyed on device_id_key.
+ *
+ * @param plugin
+ *     The RDPECAM plugin instance.
+ *
+ * @param mapping
+ *     The entry to free. Must already be unlinked from device_id_mappings.
+ */
+static void guac_rdp_rdpecam_mapping_free(guac_rdp_rdpecam_plugin* plugin,
+        guac_rdp_rdpecam_device_mapping* mapping) {
+
+    if (!mapping)
+        return;
+
+    if (plugin->device_id_map && mapping->device_id_key)
+        HashTable_Remove(plugin->device_id_map, (void*) mapping->device_id_key);
+
+    guac_mem_free(mapping->device_id_key);
+    guac_mem_free(mapping->channel_name);
+    guac_mem_free(mapping);
+}
+
+/**
  * Removes the mapping entry associated with the given device ID, if present.
  */
 static void guac_rdp_rdpecam_mapping_remove_by_device_id(
@@ -2273,17 +2402,13 @@ static void guac_rdp_rdpecam_mapping_remove_by_device_id(
 
     while (current) {
         if (current->device_id_key && strcmp(current->device_id_key, device_id) == 0) {
-            if (plugin->device_id_map)
-                HashTable_Remove(plugin->device_id_map, (void*) current->device_id_key);
 
             if (prev)
                 prev->next = current->next;
             else
                 plugin->device_id_mappings = current->next;
 
-            if (current->channel_name)
-                guac_mem_free(current->channel_name);
-            guac_mem_free(current);
+            guac_rdp_rdpecam_mapping_free(plugin, current);
             return;
         }
 
@@ -2293,35 +2418,37 @@ static void guac_rdp_rdpecam_mapping_remove_by_device_id(
 }
 
 /**
- * Removes the mapping entry associated with the given channel name, if present.
+ * Returns the browser device ID currently mapped to the given channel, or NULL
+ * if the channel has no mapping. The returned string is owned by the mapping,
+ * so it is only valid for as long as that mapping lives.
+ *
+ * As with the other mapping helpers, the caller must hold registry_lock.
+ *
+ * @param plugin
+ *     The RDPECAM plugin instance.
+ *
+ * @param channel_name
+ *     The channel to look up, e.g. "RDCamera_Device_0".
+ *
+ * @return
+ *     The browser device ID mapped to the channel, or NULL if there is none.
  */
-static void guac_rdp_rdpecam_mapping_remove_by_channel(
+static const char* guac_rdp_rdpecam_mapping_device_id_for_channel(
         guac_rdp_rdpecam_plugin* plugin, const char* channel_name) {
 
     if (!plugin || !channel_name)
-        return;
+        return NULL;
 
-    guac_rdp_rdpecam_device_mapping* prev = NULL;
     guac_rdp_rdpecam_device_mapping* current = plugin->device_id_mappings;
 
     while (current) {
-        if (current->channel_name && strcmp(current->channel_name, channel_name) == 0) {
-            if (plugin->device_id_map)
-                HashTable_Remove(plugin->device_id_map, (void*) current->device_id_key);
-
-            if (prev)
-                prev->next = current->next;
-            else
-                plugin->device_id_mappings = current->next;
-
-            guac_mem_free(current->channel_name);
-            guac_mem_free(current);
-            return;
-        }
-
-        prev = current;
+        if (current->channel_name
+                && strcmp(current->channel_name, channel_name) == 0)
+            return current->device_id_key;
         current = current->next;
     }
+
+    return NULL;
 }
 
 /**
@@ -2345,22 +2472,32 @@ static BOOL guac_rdp_rdpecam_mapping_add(
         return FALSE;
     strcpy(channel_copy, channel_name);
 
+    /* Owned copy: the caller's string is freed by the next capability update */
+    char* device_id_copy = guac_mem_alloc(strlen(device_id) + 1);
+    if (!device_id_copy) {
+        guac_mem_free(channel_copy);
+        return FALSE;
+    }
+    strcpy(device_id_copy, device_id);
+
     guac_rdp_rdpecam_device_mapping* entry =
         guac_mem_zalloc(sizeof(guac_rdp_rdpecam_device_mapping));
     if (!entry) {
+        guac_mem_free(device_id_copy);
         guac_mem_free(channel_copy);
         return FALSE;
     }
 
-    entry->device_id_key = device_id;
+    entry->device_id_key = device_id_copy;
     entry->channel_name = channel_copy;
     entry->next = plugin->device_id_mappings;
 
 #ifdef HAVE_WINPR_HASHTABLE_INSERT
-    if (!HashTable_Insert(plugin->device_id_map, (void*) device_id, (void*) entry)) {
+    if (!HashTable_Insert(plugin->device_id_map, (void*) entry->device_id_key, (void*) entry)) {
 #else
-    if (HashTable_Add(plugin->device_id_map, (void*) device_id, (void*) entry) < 0) {
+    if (HashTable_Add(plugin->device_id_map, (void*) entry->device_id_key, (void*) entry) < 0) {
 #endif
+        guac_mem_free(device_id_copy);
         guac_mem_free(channel_copy);
         guac_mem_free(entry);
         return FALSE;
@@ -2384,14 +2521,7 @@ static void guac_rdp_rdpecam_mapping_clear(
 
     while (current) {
         guac_rdp_rdpecam_device_mapping* next = current->next;
-
-        if (plugin->device_id_map)
-            HashTable_Remove(plugin->device_id_map, (void*) current->device_id_key);
-
-        if (current->channel_name)
-            guac_mem_free(current->channel_name);
-        guac_mem_free(current);
-
+        guac_rdp_rdpecam_mapping_free(plugin, current);
         current = next;
     }
 }
@@ -2546,11 +2676,18 @@ void guac_rdp_rdpecam_send_device_notifications(
     if (!plugin || !client || !rdp_client || !enumerator_channel)
         return;
 
+    /* Held for the whole function: this mutates device_id_map/device_id_mappings
+     * and registers listeners in plugin->devices, the same registry that
+     * guac_rdp_rdpecam_caps_notify() and guac_rdp_rdpecam_new_connection()
+     * touch from other threads under this same lock */
+    pthread_mutex_lock(&plugin->registry_lock);
+
     unsigned int device_count = rdp_client->rdpecam_device_caps_count;
 
     if (device_count == 0) {
         guac_client_log(client, GUAC_LOG_DEBUG,
                 "RDPECAM no devices to announce");
+        pthread_mutex_unlock(&plugin->registry_lock);
         return;
     }
 
@@ -2575,36 +2712,22 @@ void guac_rdp_rdpecam_send_device_notifications(
             device_name = fallback_name;
         }
         
-        /* Store device ID to channel name mapping */
+        /* Store device ID to channel name mapping. This must go through
+         * guac_rdp_rdpecam_mapping_add(): device_id_map holds
+         * guac_rdp_rdpecam_device_mapping, and storing a bare channel name here
+         * made guac_rdp_rdpecam_caps_notify() read it as one. */
         if (caps->device_id && caps->device_id[0] != '\0' && plugin->device_id_map) {
-            char* channel_name_copy = guac_mem_alloc(strlen(channel_name) + 1);
-            if (channel_name_copy) {
-                strcpy(channel_name_copy, channel_name);
-#ifdef HAVE_WINPR_HASHTABLE_INSERT
-                if (!HashTable_Insert(plugin->device_id_map, (void*) caps->device_id, (void*) channel_name_copy)) {
-                    guac_client_log(client, GUAC_LOG_ERROR,
-                            "RDPECAM failed to insert device ID mapping");
-                    guac_mem_free(channel_name_copy);
-                } else {
-                    guac_client_log(client, GUAC_LOG_DEBUG,
-                            "RDPECAM mapped device ID '%s' to channel '%s'",
-                            caps->device_id, channel_name);
-                }
-#else
-                /* Fallback for older WinPR versions without HashTable_Insert */
-                if (HashTable_Add(plugin->device_id_map, (void*) caps->device_id, (void*) channel_name_copy) < 0) {
-                    guac_client_log(client, GUAC_LOG_ERROR,
-                            "RDPECAM failed to add device ID mapping");
-                    guac_mem_free(channel_name_copy);
-                } else {
-                    guac_client_log(client, GUAC_LOG_DEBUG,
-                            "RDPECAM mapped device ID '%s' to channel '%s'",
-                            caps->device_id, channel_name);
-                }
-#endif
+            if (!guac_rdp_rdpecam_mapping_add(plugin, caps->device_id, channel_name)) {
+                guac_client_log(client, GUAC_LOG_ERROR,
+                        "RDPECAM failed to record device mapping for '%s'",
+                        caps->device_id);
+            } else {
+                guac_client_log(client, GUAC_LOG_DEBUG,
+                        "RDPECAM mapped device ID '%s' to channel '%s'",
+                        caps->device_id, channel_name);
             }
         }
-        
+
         /* Create listener for this device channel */
         if (plugin->manager) {
             guac_rdp_rdpecam_listener_callback* device_listener =
@@ -2651,6 +2774,8 @@ void guac_rdp_rdpecam_send_device_notifications(
         }
         if (rs) Stream_Free(rs, TRUE);
     }
+
+    pthread_mutex_unlock(&plugin->registry_lock);
 }
 
 /**
